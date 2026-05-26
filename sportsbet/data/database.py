@@ -745,6 +745,55 @@ class SportsDatabase:
             ).fetchone()
             return int(row["n"]) if row else 0
 
+    def count_odds_for_date(self, sport: Sport, match_date: str) -> int:
+        """某天是否已存在 odds（用於避免反覆抓取）。"""
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS n
+                FROM odds o
+                JOIN games g ON g.id = o.game_id
+                WHERE g.sport = ?
+                  AND g.match_date = ?
+                """,
+                (sport, match_date),
+            ).fetchone()
+            return int(row["n"]) if row else 0
+
+    def count_scored_games_missing_forecast(self, sport: Sport) -> int:
+        """已完賽（有分數）但尚未產生 game_forecasts 的場次數量。"""
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS n
+                FROM games g
+                LEFT JOIN game_forecasts f ON f.game_id = g.id
+                WHERE g.sport = ?
+                  AND g.home_score IS NOT NULL
+                  AND g.away_score IS NOT NULL
+                  AND f.game_id IS NULL
+                """,
+                (sport,),
+            ).fetchone()
+            return int(row["n"]) if row else 0
+
+    def count_scored_games_missing_predictions(self, sport: Sport) -> int:
+        """已完賽（有分數）但尚未產生 predictions 的場次數量。"""
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS n
+                FROM games g
+                LEFT JOIN predictions p ON p.game_id = g.id
+                WHERE g.sport = ?
+                  AND g.home_score IS NOT NULL
+                  AND g.away_score IS NOT NULL
+                  AND p.game_id IS NULL
+                """,
+                (sport,),
+            ).fetchone()
+            return int(row["n"]) if row else 0
+
     def get_backtest_frame(self, sport: Sport) -> pd.DataFrame:
         """已結束賽事 + 預測機率 + 賠率，供評估模組使用。"""
         with self.connection() as conn:

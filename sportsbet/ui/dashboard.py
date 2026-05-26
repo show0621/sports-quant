@@ -77,10 +77,18 @@ def ensure_data(sport: str, *, seed_history: bool, use_mock_only: bool = False) 
     today = date.today().isoformat()
     for offset in range(7):
         d = (date.today() + timedelta(days=offset)).isoformat()
-        if db.get_games(sport, d).empty:
+        games_d = db.get_games(sport, d)
+        need_schedule = (
+            games_d.empty
+            or games_d["home_score"].isna().any()
+            or games_d["away_score"].isna().any()
+        )
+        if need_schedule:
             provider.fetch_daily_schedule(sport, d)
-            if offset == 0:
-                provider.fetch_odds(sport, d)
+
+        # odds 可能會在「有賽程但尚未抓到」的狀況出現缺口；這裡確保補齊
+        if db.count_odds_for_date(sport, d) == 0:
+            provider.fetch_odds(sport, d)
     if seed_history and db.get_backtest_frame(sport).empty and (use_mock_only or not api_key_configured()):
         provider.seed_historical_backtest(sport, days=60)
 
@@ -94,7 +102,22 @@ def ensure_data(sport: str, *, seed_history: bool, use_mock_only: bool = False) 
     svc.run_upcoming(sport, days_ahead=7)
 
     if db.get_forecast_review(sport, final_only=True).empty:
-        run_full_backtest_refresh(db, sport, sync_api=api_key_configured() and not use_mock_only)
+        run_full_backtest_refresh(
+            db,
+            sport,
+            sync_api=api_key_configured() and not use_mock_only,
+            sync_injuries=False,
+        )
+    else:
+        missing_forecasts = db.count_scored_games_missing_forecast(sport)
+        missing_predictions = db.count_scored_games_missing_predictions(sport)
+        if missing_forecasts > 0 or missing_predictions > 0:
+            run_full_backtest_refresh(
+                db,
+                sport,
+                sync_api=False,
+                sync_injuries=False,
+            )
 
     _persist_database(f"chore(data): auto sync {sport} after load")
 
