@@ -646,6 +646,17 @@ class SportsDatabase:
                 params=(sport, team),
             )
 
+    def clear_injuries(self, sport: Sport, *, source: str | None = "mock") -> int:
+        with self.connection() as conn:
+            if source:
+                cur = conn.execute(
+                    "DELETE FROM injury_reports WHERE sport = ? AND source = ?",
+                    (sport, source),
+                )
+            else:
+                cur = conn.execute("DELETE FROM injury_reports WHERE sport = ?", (sport,))
+            return cur.rowcount
+
     def get_injuries(self, sport: Sport, report_date: str | None = None) -> pd.DataFrame:
         d = report_date or date.today().isoformat()
         with self.connection() as conn:

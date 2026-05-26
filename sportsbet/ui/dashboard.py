@@ -76,7 +76,7 @@ def ensure_data(sport: str, *, seed_history: bool, use_mock_only: bool = False) 
 
     svc = get_prediction_service()
     svc.run_upcoming(sport, days_ahead=7)
-    if db.get_injuries(sport).empty:
+    if db.get_injuries(sport).empty and not api_key_configured():
         sync_v2_player_data(db, sport)
 
     if db.get_forecast_review(sport, final_only=True).empty:
@@ -404,9 +404,22 @@ def main() -> None:
         provider.fetch_odds(sport)
         if seed or not api_key_configured():
             provider.seed_historical_backtest(sport, days=60)
+        sync_v2_player_data(db, sport)
         st.sidebar.success("MOCK 資料已更新")
         st.cache_resource.clear()
         st.rerun()
+
+    with st.sidebar.expander("傷兵示範 (MOCK)", expanded=False):
+        st.caption("API-Sports 尚無傷兵端點；僅供介面示範。")
+        db_inj = get_db()
+        if st.button("載入示範傷兵", key="load_mock_inj"):
+            sync_v2_player_data(db_inj, sport)
+            st.success("已載入示範傷兵")
+            st.rerun()
+        if st.button("清除示範傷兵", key="clear_mock_inj"):
+            n = db_inj.clear_injuries(sport, source="mock")
+            st.success(f"已清除 {n} 筆")
+            st.rerun()
 
     ensure_data(sport, seed_history=seed)
 

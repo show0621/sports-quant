@@ -43,11 +43,14 @@ class MockPlayerDataProvider(PlayerDataProvider):
 
     def _nba_roster_template(self, team: str) -> list[dict]:
         positions = ["PG", "SG", "SF", "PF", "C", "G", "F"]
-        stars = ["Alpha Star", "Beta Wing", "Gamma Big", "Delta Guard", "Epsilon Spark"]
+        # 每位球員唯一名稱，避免跑馬燈出現重複顯示
+        first = ["Jay", "Marcus", "Tyler", "Devin", "Chris", "Kyle", "Jordan", "Alex", "Derrick", "Bobby"]
+        last = ["Allen", "Brown", "Clark", "Davis", "Evans", "Foster", "Green", "Harris", "Irving", "Jones"]
+        tag = team.split()[-1][:3].upper()
         return [
             {
-                "player_id": f"{team[:3].upper()}-{i}",
-                "name": f"{team.split()[-1]} {stars[i % len(stars)]}",
+                "player_id": f"{tag}-{i}",
+                "name": f"{first[i]} {last[i]}",
                 "position": positions[i % len(positions)],
             }
             for i in range(10)
