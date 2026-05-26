@@ -1,14 +1,17 @@
 """資料獲取層：抽象介面與 MOCK 產生器，供後續串接 nba_api / statsapi。"""
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from datetime import date, datetime, timedelta
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
 
 from sportsbet.data.database import Sport, SportsDatabase
+
+logger = logging.getLogger(__name__)
 
 SportLit = Literal["nba", "mlb"]
 
@@ -54,7 +57,15 @@ class MockDataProvider(DataIngestionProvider):
         rows = []
         for i in range(0, len(shuffled), 2):
             home, away = shuffled[i], shuffled[i + 1]
-            gid = self.db.upsert_game(sport, d, home, away, match_datetime=f"{d}T19:00:00")
+            from sportsbet.data.team_logos import espn_logo_url
+
+            hour = 18 + (i // 2) % 5
+            gid = self.db.upsert_game(
+                sport, d, home, away,
+                match_datetime=f"{d}T{hour:02d}:30:00+00:00",
+                home_logo_url=espn_logo_url(home, sport),
+                away_logo_url=espn_logo_url(away, sport),
+            )
             rows.append(
                 {
                     "game_id": gid,
@@ -141,13 +152,15 @@ class MockDataProvider(DataIngestionProvider):
         self,
         sport: SportLit,
         *,
-        days: int = 60,
+        days: int | None = None,
         season: str | int | None = None,
     ) -> pd.DataFrame:
-        """產生含賽果的歷史資料，供 Brier / 資金回測。"""
+        """產生含賽果的歷史資料，供 Brier / 資金回測（預設 3 年）。"""
+        from sportsbet import config
         from sportsbet.models.analytics_engine import AnalyticsEngine
         from sportsbet.risk.ev import RiskManager
 
+        days = days if days is not None else config.BACKTEST_DAYS
         self.fetch_historical_stats(sport, season)
         stats = self.db.get_team_stats(sport).set_index("team")
         engine = AnalyticsEngine(sport)
@@ -156,6 +169,9 @@ class MockDataProvider(DataIngestionProvider):
         all_rows = []
 
         for offset in range(days):
+            days_ago = days - offset
+            if days_ago > 120 and offset % 2 != 0:
+                continue
             d = (start + timedelta(days=offset)).isoformat()
             sched = self.fetch_daily_schedule(sport, d)
             odds_df = self.fetch_odds(sport, d)
@@ -207,23 +223,94 @@ class MockDataProvider(DataIngestionProvider):
                         }
                     )
 
+        from sportsbet.services.prediction_service import PredictionService
+
+        PredictionService(self.db).run_backtest_reconcile(sport)
         return self.db.get_backtest_frame(sport)
 
 
 class ApiSportsIngestionAdapter(DataIngestionProvider):
-    """
-    橋接既有 ApiSportsClient（未來可擴充實作）。
-    目前 fetch_* 仍委派給 Mock，避免無 API key 時失敗。
-    """
+    """API-Sports 賽程/統計 + 台灣運彩 Blob 賠率。"""
 
-    def __init__(self, fallback: DataIngestionProvider | None = None):
-        self._fallback = fallback or MockDataProvider()
+    def __init__(
+        self,
+        db: SportsDatabase | None = None,
+        client: Any | None = None,
+        fallback: MockDataProvider | None = None,
+    ):
+        from sportsbet.data.api_sports import ApiSportsClient, infer_season
+
+        self.db = db or SportsDatabase()
+        self.client = client or ApiSportsClient()
+        self._infer_season = infer_season
+        self._fallback = fallback or MockDataProvider(self.db)
 
     def fetch_daily_schedule(self, sport: SportLit, match_date: str | None = None) -> pd.DataFrame:
-        return self._fallback.fetch_daily_schedule(sport, match_date)
+        d = match_date or date.today().isoformat()
+        if not self.client.is_configured:
+            return self._fallback.fetch_daily_schedule(sport, d)
+        return self.client.sync_daily_to_database(self.db, sport, d)
 
     def fetch_historical_stats(self, sport: SportLit, season: str | int | None = None) -> pd.DataFrame:
-        return self._fallback.fetch_historical_stats(sport, season)
+        if not self.client.is_configured:
+            return self._fallback.fetch_historical_stats(sport, season)
+        season_int = int(season) if season else self._infer_season(sport)
+        self.client.sync_team_logos(self.db, sport, season_int)
+        stats = self.client.sync_to_database(self.db, sport, season_int)
+        if stats.empty:
+            logger.warning("API-Sports 未回傳球隊統計，賽季=%s", season_int)
+        return stats
 
     def fetch_odds(self, sport: SportLit, match_date: str | None = None) -> pd.DataFrame:
-        return self._fallback.fetch_odds(sport, match_date)
+        d = match_date or date.today().isoformat()
+        rows = self._fetch_sportslottery_odds(sport, d)
+        if not rows.empty:
+            return rows
+        logger.info("運彩 Blob 無賠率，改用 MOCK 賠率")
+        return self._fallback.fetch_odds(sport, d)
+
+    def _fetch_sportslottery_odds(self, sport: SportLit, match_date: str) -> pd.DataFrame:
+        from sportsbet.data.sportslottery import SportLotteryClient
+        from sportsbet.data.team_names import normalize_matchup
+
+        try:
+            client = SportLotteryClient()
+            odds_df = client.fetch_all(sports={sport})
+        except Exception as exc:
+            logger.warning("運彩 Blob 抓取失敗: %s", exc)
+            return pd.DataFrame()
+
+        if odds_df.empty:
+            return odds_df
+
+        odds_df = odds_df.copy()
+        odds_df[["home_team", "away_team"]] = odds_df.apply(
+            lambda r: pd.Series(normalize_matchup(r["home_team"], r["away_team"], sport)),
+            axis=1,
+        )
+        if "match_date" in odds_df.columns:
+            odds_df = odds_df[odds_df["match_date"].astype(str).str[:10] == d]
+
+        games = self.db.get_games(sport, d)
+        if games.empty:
+            return pd.DataFrame()
+
+        inserted = []
+        for _, o in odds_df.iterrows():
+            match = games[
+                (games["home_team"] == o["home_team"]) & (games["away_team"] == o["away_team"])
+            ]
+            if match.empty:
+                continue
+            gid = int(match.iloc[0]["id"])
+            self.db.insert_odds(
+                gid,
+                str(o.get("market", "moneyline")),
+                str(o.get("selection", "home")),
+                float(o["odds"]),
+                handicap=float(o["handicap"]) if pd.notna(o.get("handicap")) else None,
+                bookmaker="sportslottery",
+            )
+            inserted.append({**o.to_dict(), "game_id": gid})
+
+        return pd.DataFrame(inserted)

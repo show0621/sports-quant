@@ -20,9 +20,26 @@ for _d in (NBA_DATA_DIR, MLB_DATA_DIR, WANDA_DATA_DIR, LOG_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
 # --- API ---
-API_SPORTS_KEY = os.getenv("API_SPORTS_KEY", "")
 API_SPORTS_BASE = "https://v1.basketball.api-sports.io"  # NBA
 API_SPORTS_MLB_BASE = "https://v1.baseball.api-sports.io"  # MLB
+API_SPORTS_LEAGUE_NBA = int(os.getenv("API_SPORTS_LEAGUE_NBA", "12"))
+API_SPORTS_LEAGUE_MLB = int(os.getenv("API_SPORTS_LEAGUE_MLB", "1"))
+
+
+def resolve_api_sports_key() -> str:
+    """從 .env 或 Streamlit Secrets 讀取 API-Sports 金鑰。"""
+    key = os.getenv("API_SPORTS_KEY", "").strip()
+    if key:
+        return key
+    try:
+        import streamlit as st
+
+        return str(st.secrets.get("API_SPORTS_KEY", "")).strip()
+    except Exception:
+        return ""
+
+
+API_SPORTS_KEY = resolve_api_sports_key()
 
 # --- 畢達哥拉斯指數 ---
 PYTH_EXPONENT_NBA = float(os.getenv("PYTH_EXPONENT_NBA", "14.0"))
@@ -47,6 +64,16 @@ INITIAL_BANKROLL = float(os.getenv("INITIAL_BANKROLL", "100000"))
 KELLY_FRACTION = float(os.getenv("KELLY_FRACTION", "0.25"))  # 四分之一凱利
 MAX_BET_FRACTION = float(os.getenv("MAX_BET_FRACTION", "0.05"))  # 單注上限 5%
 MIN_EV_THRESHOLD = float(os.getenv("MIN_EV_THRESHOLD", "0.02"))  # EV > 2% 才進場
+
+# --- 回測區間 ---
+BACKTEST_YEARS = int(os.getenv("BACKTEST_YEARS", "3"))
+BACKTEST_DAYS = int(os.getenv("BACKTEST_DAYS", str(BACKTEST_YEARS * 365)))
+
+# --- V2 Bottom-Up ---
+USE_ROSTER_RATING = os.getenv("USE_ROSTER_RATING", "true").lower() == "true"
+ROSTER_RATING_BLEND = float(os.getenv("ROSTER_RATING_BLEND", "0.35"))  # 與畢達哥拉斯混合權重
+INJURY_EXCLUDE_STATUSES = ("Out", "Doubtful")
+INJURY_DISCOUNT = {"Questionable": 0.5, "Probable": 0.85}
 
 # --- 威剛爬蟲（舊 HTML；現以運彩 Blob + JBot 為主） ---
 WANDA_BASE_URL = os.getenv("WANDA_BASE_URL", "https://www.twsport.com.tw")

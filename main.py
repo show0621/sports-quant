@@ -137,16 +137,21 @@ def cmd_merge_backtest(args: argparse.Namespace) -> None:
 
 
 def cmd_seed(args: argparse.Namespace) -> None:
+    from sportsbet import config
     from sportsbet.data.database import SportsDatabase
     from sportsbet.data.ingestion import MockDataProvider
+    from sportsbet.data.player_ingestion import sync_v2_player_data
 
     db = SportsDatabase()
     provider = MockDataProvider(db)
     provider.fetch_historical_stats(args.sport)
     provider.fetch_daily_schedule(args.sport)
     provider.fetch_odds(args.sport)
+    sync_v2_player_data(db, args.sport)
     if not args.no_history:
-        df = provider.seed_historical_backtest(args.sport, days=args.days)
+        days = args.days if args.days is not None else config.BACKTEST_DAYS
+        logger.info("產生 %d 天（約 %d 年）回測資料…", days, config.BACKTEST_YEARS)
+        df = provider.seed_historical_backtest(args.sport, days=days)
         logger.info("歷史回測 %d 列", len(df))
     logger.info("SQLite: %s", db.db_path)
 
@@ -203,7 +208,7 @@ def main() -> None:
 
     p_seed = sub.add_parser("seed", help="寫入 MOCK 資料到 SQLite")
     p_seed.add_argument("--sport", choices=["nba", "mlb"], default="nba")
-    p_seed.add_argument("--days", type=int, default=60)
+    p_seed.add_argument("--days", type=int, default=None, help="回測天數，預設 3 年")
     p_seed.add_argument("--no-history", action="store_true")
     p_seed.set_defaults(func=cmd_seed)
 

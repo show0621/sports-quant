@@ -2,6 +2,19 @@
 
 NBA / MLB 台灣運彩（威剛）量化監控與回測系統。結合運動統計學（畢達哥拉斯期望值）、機率推論（貝氏定理）與財務工程（期望值、凱利資金控管）。
 
+## V2.0 擴充（Bottom-Up + 傷兵）
+
+詳見 [docs/ARCHITECTURE_V2.md](docs/ARCHITECTURE_V2.md)
+
+- **回測預設 3 年**：`BACKTEST_YEARS=3`（1095 天）
+- **動態陣容評分**：`sportsbet/models/roster_engine.py`（VORP/WAR 加權 + 傷兵剔除）
+- **看板**：傷兵跑馬燈、賽事預測（現在/未來）、回測覆盤、球員熱區圖
+
+```powershell
+python main.py seed --sport nba
+python scripts/seed_mock_db.py --sport nba
+```
+
 ## 系統架構
 
 ```
@@ -21,15 +34,28 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 copy .env.example .env
-# 編輯 .env 填入 API_SPORTS_KEY
+# 編輯 .env 填入 API_SPORTS_KEY（至 https://api-sports.io/ 後台取得）
 ```
 
-### 1. 抓取國外賽事數據
+**Streamlit Cloud**：在 App → Settings → Secrets 加入：
+
+```toml
+API_SPORTS_KEY = "你的金鑰"
+```
+
+（可參考 `.streamlit/secrets.toml.example`）
+```
+
+### 1. 抓取國外賽事數據（API-Sports）
+
+先在 `.env` 設定 `API_SPORTS_KEY`，再執行：
 
 ```powershell
-python main.py fetch --sport nba --season 2024
-python main.py fetch --sport mlb --season 2024
+python main.py fetch --sport nba --season 2025
+python main.py fetch --sport mlb --season 2025
 ```
+
+看板側欄可點 **「同步 API-Sports + 運彩賠率」**（賽程/統計來自 API，賠率來自台灣運彩 Blob）。
 
 ### 2. 運彩賠率
 

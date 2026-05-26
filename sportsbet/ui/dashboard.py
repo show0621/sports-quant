@@ -6,7 +6,7 @@ Streamlit 多頁面看板：每日預測、模型健康度、資金回測。
 from __future__ import annotations
 
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -20,12 +20,25 @@ if str(ROOT) not in sys.path:
 
 from sportsbet import config  # noqa: E402
 from sportsbet.data.database import SportsDatabase  # noqa: E402
+from sportsbet.data.player_ingestion import sync_v2_player_data  # noqa: E402
 from sportsbet.data.ingestion import MockDataProvider  # noqa: E402
+from sportsbet.data.provider import api_key_configured, get_data_provider  # noqa: E402
 from sportsbet.evaluation.evaluator import EvaluationModule  # noqa: E402
 from sportsbet.models.analytics_engine import AnalyticsEngine  # noqa: E402
+from sportsbet.models.forecast import team_detail_dataframe  # noqa: E402
 from sportsbet.risk.ev import RiskManager  # noqa: E402
+from sportsbet.services.prediction_service import PredictionService  # noqa: E402
+from sportsbet.ui.hot_cold_page import page_player_hot_cold  # noqa: E402
+from sportsbet.ui.injury_ticker import render_injury_ticker  # noqa: E402
+from sportsbet.ui.upcoming_page import page_current_future_predictions  # noqa: E402
 
 st.set_page_config(page_title="運彩量化看板", layout="wide", page_icon="📊")
+
+
+def _pct(v: float | None) -> str:
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return "—"
+    return f"{float(v) * 100:.1f}%"
 
 
 @st.cache_resource
@@ -33,17 +46,41 @@ def get_db() -> SportsDatabase:
     return SportsDatabase()
 
 
-def ensure_data(sport: str, *, seed_history: bool) -> None:
+@st.cache_resource
+def get_prediction_service() -> PredictionService:
+    return PredictionService(get_db())
+
+
+def ensure_data(sport: str, *, seed_history: bool, use_mock_only: bool = False) -> None:
     db = get_db()
-    provider = MockDataProvider(db)
+    provider = MockDataProvider(db) if use_mock_only else get_data_provider(db)
+    season = None
+    if api_key_configured() and not use_mock_only:
+        from sportsbet.data.api_sports import infer_season
+
+        season = infer_season(sport)  # type: ignore[arg-type]
+
     if db.get_team_stats(sport).empty:
-        provider.fetch_historical_stats(sport)
+        provider.fetch_historical_stats(sport, season)
+    from datetime import timedelta
+
     today = date.today().isoformat()
-    if db.get_games(sport, today).empty:
-        provider.fetch_daily_schedule(sport, today)
-        provider.fetch_odds(sport, today)
-    if seed_history and db.get_backtest_frame(sport).empty:
+    for offset in range(7):
+        d = (date.today() + timedelta(days=offset)).isoformat()
+        if db.get_games(sport, d).empty:
+            provider.fetch_daily_schedule(sport, d)
+            if offset == 0:
+                provider.fetch_odds(sport, d)
+    if seed_history and db.get_backtest_frame(sport).empty and (use_mock_only or not api_key_configured()):
         provider.seed_historical_backtest(sport, days=60)
+
+    svc = get_prediction_service()
+    svc.run_upcoming(sport, days_ahead=7)
+    if db.get_injuries(sport).empty:
+        sync_v2_player_data(db, sport)
+
+    if db.get_forecast_review(sport, final_only=True).empty:
+        svc.run_backtest_reconcile(sport)
 
 
 def build_daily_predictions(sport: str) -> pd.DataFrame:
@@ -93,8 +130,99 @@ def build_daily_predictions(sport: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def page_backtest_review(sport: str) -> None:
+    st.header("回測覆盤（歷史賽事）")
+    st.caption(
+        f"預設回測區間：過去 {config.BACKTEST_YEARS} 年（{config.BACKTEST_DAYS} 天）。"
+        "現在/未來預測請至「賽事預測」分頁。"
+    )
+
+    svc = get_prediction_service()
+    if st.button("重新產生全部覆盤紀錄", type="primary"):
+        with st.spinner("計算中…"):
+            svc.run_backtest_reconcile(sport)
+        st.success("覆盤紀錄已更新")
+        st.rerun()
+
+    review = svc.get_review_table(sport, final_only=True)
+    if review.empty:
+        st.warning("尚無已結束賽事的覆盤資料，請先載入歷史賽果或按上方按鈕產生。")
+        return
+
+    hits = review["pick_correct"].sum()
+    total = len(review)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("勝負預測命中", f"{hits}/{total}", f"{hits/total:.1%}" if total else "—")
+    if "margin_error" in review.columns:
+        c2.metric("平均分差誤差", f"{review['margin_error'].abs().mean():.1f} 分")
+    if "total_error" in review.columns:
+        c3.metric("平均總分誤差", f"{review['total_error'].abs().mean():.1f} 分")
+
+    display = review.rename(
+        columns={
+            "match_date": "日期",
+            "home_team": "主隊",
+            "away_team": "客隊",
+            "predicted_winner": "預測勝者",
+            "actual_winner": "實際勝者",
+            "home_win_prob": "主隊預測勝率",
+            "away_win_prob": "客隊預測勝率",
+            "predicted_home_score": "預測主隊分",
+            "predicted_away_score": "預測客隊分",
+            "actual_home_score": "實際主隊分",
+            "actual_away_score": "實際客隊分",
+            "predicted_total": "預測總分",
+            "predicted_margin": "預測分差",
+            "margin_error": "分差誤差",
+            "total_error": "總分誤差",
+            "prob_over": "大分機率",
+            "total_line": "大小分線",
+        }
+    )
+    pct_cols = ["主隊預測勝率", "客隊預測勝率", "大分機率"]
+    for col in pct_cols:
+        if col in display.columns:
+            display[col] = display[col].map(_pct)
+
+    show_cols = [
+        c
+        for c in [
+            "日期", "主隊", "客隊", "預測勝者", "實際勝者", "預測正確",
+            "主隊預測勝率", "客隊預測勝率",
+            "預測主隊分", "預測客隊分", "實際主隊分", "實際客隊分",
+            "預測總分", "預測分差", "分差誤差", "總分誤差", "大小分線", "大分機率",
+        ]
+        if c in display.columns
+    ]
+    st.dataframe(display[show_cols], use_container_width=True, hide_index=True)
+
+    st.subheader("各隊數據明細（最近一場）")
+    if not review.empty:
+        last = review.iloc[0]
+        st.write(f"**{last['home_team']} vs {last['away_team']}** ({last['match_date']})")
+        team_rows = pd.DataFrame(
+            [
+                {
+                    "隊伍": last["home_team"],
+                    "畢達哥拉斯": _pct(last.get("home_pyth")),
+                    "賽季勝率": _pct(last.get("home_season_win_pct")),
+                    "近況": _pct(last.get("home_recent_win_pct")),
+                    "貝氏修正": _pct(last.get("home_bayesian_win_pct")),
+                },
+                {
+                    "隊伍": last["away_team"],
+                    "畢達哥拉斯": _pct(last.get("away_pyth")),
+                    "賽季勝率": _pct(last.get("away_season_win_pct")),
+                    "近況": _pct(last.get("away_recent_win_pct")),
+                    "貝氏修正": _pct(last.get("away_bayesian_win_pct")),
+                },
+            ]
+        )
+        st.dataframe(team_rows, use_container_width=True, hide_index=True)
+
+
 def page_daily_picks(sport: str) -> None:
-    st.header("每日預測 (Daily Picks)")
+    st.header("投注訊號 (EV)")
     st.caption("僅顯示 EV > 0 的場次 · 四分之一凱利建議倉位")
     df = build_daily_predictions(sport)
     if df.empty:
@@ -225,27 +353,79 @@ def page_bankroll(sport: str) -> None:
 def main() -> None:
     st.sidebar.title("運彩量化看板")
     sport = st.sidebar.selectbox("運動", ["nba", "mlb"])
-    seed = st.sidebar.checkbox("載入 60 天 MOCK 歷史（回測用）", value=True)
+
+    if api_key_configured():
+        st.sidebar.success("API-Sports 已設定")
+    else:
+        st.sidebar.warning("未設定 API_SPORTS_KEY（使用 MOCK）")
+
+    seed = st.sidebar.checkbox(
+        "載入 MOCK 歷史（僅無 API 時）",
+        value=not api_key_configured(),
+        disabled=api_key_configured(),
+    )
+
+    if st.sidebar.button("同步 API-Sports + 運彩賠率"):
+        if not api_key_configured():
+            st.sidebar.error("請先在 Secrets 或 .env 設定 API_SPORTS_KEY")
+        else:
+            db = get_db()
+            provider = get_data_provider(db)
+            with st.spinner("同步中…"):
+                from sportsbet.data.api_sports import ApiSportsClient, infer_season
+
+                season = infer_season(sport)  # type: ignore[arg-type]
+                client = ApiSportsClient()
+                if client.is_configured:
+                    client.sync_team_logos(get_db(), sport, season)
+                provider.fetch_historical_stats(sport, season)
+                provider.fetch_daily_schedule(sport)
+                provider.fetch_odds(sport)
+            svc_pred = get_prediction_service()
+            for offset in range(7):
+                d = (date.today() + timedelta(days=offset)).isoformat()
+                provider.fetch_daily_schedule(sport, d)
+            provider.fetch_odds(sport)
+            svc_pred.run_upcoming(sport, days_ahead=7)
+            svc_pred.run_backtest_reconcile(sport)
+            st.sidebar.success("同步完成")
+            st.cache_resource.clear()
+            st.rerun()
+
     if st.sidebar.button("重新載入 MOCK 資料"):
         db = get_db()
         provider = MockDataProvider(db)
         provider.fetch_historical_stats(sport)
-        provider.fetch_daily_schedule(sport)
+        from datetime import timedelta as _td
+
+        for _off in range(7):
+            _d = (date.today() + _td(days=_off)).isoformat()
+            provider.fetch_daily_schedule(sport, _d)
         provider.fetch_odds(sport)
-        if seed:
+        if seed or not api_key_configured():
             provider.seed_historical_backtest(sport, days=60)
-        st.sidebar.success("資料已更新")
+        st.sidebar.success("MOCK 資料已更新")
         st.cache_resource.clear()
         st.rerun()
 
     ensure_data(sport, seed_history=seed)
 
-    tab1, tab2, tab3 = st.tabs(["每日預測", "模型健康度", "資金回測"])
+    render_injury_ticker(get_db(), sport)
+
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+        ["賽事預測", "回測覆盤", "球員熱區", "投注訊號", "模型健康度", "資金回測"]
+    )
     with tab1:
-        page_daily_picks(sport)
+        page_current_future_predictions(sport, get_prediction_service())
     with tab2:
-        page_model_health(sport)
+        page_backtest_review(sport)
     with tab3:
+        page_player_hot_cold(get_db(), sport)
+    with tab4:
+        page_daily_picks(sport)
+    with tab5:
+        page_model_health(sport)
+    with tab6:
         page_bankroll(sport)
 
 
