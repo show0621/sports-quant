@@ -75,11 +75,13 @@ def ensure_data(sport: str, *, seed_history: bool, use_mock_only: bool = False) 
         provider.seed_historical_backtest(sport, days=60)
 
     svc = get_prediction_service()
-    svc.run_upcoming(sport, days_ahead=7)
     inj_df = db.get_injuries(sport)
     # 若資料庫尚無傷兵，或目前全是 MOCK（先前載入過示範），改用 ESPN 更新
     if inj_df.empty or ("source" in inj_df.columns and not inj_df.empty and (inj_df["source"] == "mock").all()):
         sync_v2_player_data(db, sport)
+
+    # 必須在傷兵資料就緒後再跑 upcoming，讓 forecast 反映 injury_penalty
+    svc.run_upcoming(sport, days_ahead=7)
 
     if db.get_forecast_review(sport, final_only=True).empty:
         svc.run_backtest_reconcile(sport)
