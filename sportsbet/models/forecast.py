@@ -42,6 +42,10 @@ class GameForecast:
     prob_over: float | None
     prob_under: float | None
     margin_note: str
+    home_win_prob_base: float | None = None
+    away_win_prob_base: float | None = None
+    home_injury_adj: float | None = None
+    away_injury_adj: float | None = None
     match_datetime: str | None = None
     home_logo_url: str | None = None
     away_logo_url: str | None = None
@@ -84,6 +88,10 @@ class GameForecast:
             "away_bayesian_win_pct": self.away.bayesian_win_pct,
             "home_win_prob": self.home_win_prob,
             "away_win_prob": self.away_win_prob,
+            "home_win_prob_base": self.home_win_prob_base,
+            "away_win_prob_base": self.away_win_prob_base,
+            "home_injury_adj": self.home_injury_adj,
+            "away_injury_adj": self.away_injury_adj,
             "predicted_winner": self.predicted_winner,
             "predicted_home_score": self.predicted_home_score,
             "predicted_away_score": self.predicted_away_score,
@@ -181,8 +189,10 @@ def build_game_forecast(
     )
 
     total = bayes_home + bayes_away
-    home_prob = bayes_home / total
-    away_prob = bayes_away / total
+    home_prob_base = bayes_home / total
+    away_prob_base = bayes_away / total
+    home_prob = home_prob_base
+    away_prob = away_prob_base
 
     home_adj = away_adj = home_pen = away_pen = None
     home_miss: list[dict[str, Any]] = []
@@ -264,6 +274,10 @@ def build_game_forecast(
         ),
         home_win_prob=home_prob,
         away_win_prob=away_prob,
+        home_win_prob_base=home_prob_base,
+        away_win_prob_base=away_prob_base,
+        home_injury_adj=home_prob - home_prob_base,
+        away_injury_adj=away_prob - away_prob_base,
         predicted_winner=winner,
         predicted_home_score=pred_home,
         predicted_away_score=pred_away,
@@ -339,6 +353,12 @@ def team_detail_dataframe(f: GameForecast) -> pd.DataFrame:
                 "近況勝率": side.recent_win_pct,
                 "Log5單場勝率": side.log5_matchup_win_pct,
                 "貝氏修正勝率": side.bayesian_win_pct,
+                "傷兵前勝率": (
+                    f.home_win_prob_base if label == "主" else f.away_win_prob_base
+                ),
+                "傷兵修正": (
+                    f.home_injury_adj if label == "主" else f.away_injury_adj
+                ),
                 "最終預測勝率": f.home_win_prob if label == "主" else f.away_win_prob,
             }
         )

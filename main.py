@@ -136,6 +136,28 @@ def cmd_merge_backtest(args: argparse.Namespace) -> None:
     subprocess.run(cmd, check=False)
 
 
+def cmd_refresh_backtest(args: argparse.Namespace) -> None:
+    from sportsbet.data.database import SportsDatabase
+    from sportsbet.data.db_github_sync import push_database_to_github
+    from sportsbet.services.data_refresh import run_full_backtest_refresh
+
+    db = SportsDatabase()
+    stats = run_full_backtest_refresh(db, args.sport, sync_api=not args.no_api)
+    logger.info("覆盤刷新: %s", stats)
+    if args.push:
+        push_database_to_github(message=f"chore(data): refresh backtest {args.sport}")
+
+
+def cmd_push_db(args: argparse.Namespace) -> None:
+    from sportsbet.data.db_github_sync import push_database_to_github
+
+    ok = push_database_to_github(force=True)
+    if ok:
+        logger.info("資料庫已推送至 GitHub")
+    else:
+        logger.error("推送失敗（請確認 GITHUB_TOKEN）")
+
+
 def cmd_seed(args: argparse.Namespace) -> None:
     from sportsbet import config
     from sportsbet.data.database import SportsDatabase
@@ -205,6 +227,15 @@ def main() -> None:
     p_merge.add_argument("--save", action="store_true")
     p_merge.add_argument("--no-backtest", action="store_true")
     p_merge.set_defaults(func=cmd_merge_backtest)
+
+    p_refresh = sub.add_parser("refresh-backtest", help="同步歷史賽果並重算全部覆盤")
+    p_refresh.add_argument("--sport", choices=["nba", "mlb"], default="nba")
+    p_refresh.add_argument("--no-api", action="store_true", help="不呼叫 API-Sports")
+    p_refresh.add_argument("--push", action="store_true", help="完成後推送 DB 至 GitHub")
+    p_refresh.set_defaults(func=cmd_refresh_backtest)
+
+    p_push = sub.add_parser("push-db", help="推送 data/sportsbet.db 至 GitHub")
+    p_push.set_defaults(func=cmd_push_db)
 
     p_seed = sub.add_parser("seed", help="寫入 MOCK 資料到 SQLite")
     p_seed.add_argument("--sport", choices=["nba", "mlb"], default="nba")

@@ -70,10 +70,16 @@ class DynamicRosterRatingEngine:
         return inn / max(total_minutes, 1e-6)
 
     def _injury_status_map(self, sport: Sport, team: str, match_date: str) -> dict[str, str]:
+        from sportsbet.data.team_logos import resolve_team_in_database
+
         inj = self.db.get_injuries(sport, match_date)
         if inj.empty:
             return {}
-        team_inj = inj[inj["team"] == team]
+        resolved = resolve_team_in_database(self.db, sport, team)  # type: ignore[arg-type]
+        team_inj = inj[inj["team"].isin({team, resolved})]
+        if team_inj.empty:
+            last = team.split()[-1].lower()
+            team_inj = inj[inj["team"].str.split().str[-1].str.lower() == last]
         return dict(zip(team_inj["player_id"], team_inj["status"]))
 
     def compute_team_rating(

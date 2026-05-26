@@ -41,9 +41,17 @@ copy .env.example .env
 
 ```toml
 API_SPORTS_KEY = "你的金鑰"
+# 選填：自動將 data/sportsbet.db 推送到 GitHub（需 repo 寫入權限）
+# GITHUB_TOKEN = "ghp_xxxxxxxx"
 ```
 
 （可參考 `.streamlit/secrets.toml.example`）
+
+**GitHub 資料庫持久化**：`data/sportsbet.db` 會被追蹤並在資料更新後自動 push（需設定 `GITHUB_TOKEN`）。本機可執行：
+
+```powershell
+python main.py refresh-backtest --sport nba --push
+python main.py push-db
 ```
 
 ### 1. 抓取國外賽事數據（API-Sports）

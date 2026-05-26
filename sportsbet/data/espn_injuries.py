@@ -8,7 +8,6 @@ ESPN 公開 API：聯盟傷兵名單與球隊 roster。
 from __future__ import annotations
 
 import logging
-import re
 from datetime import date
 from typing import Any, Literal
 

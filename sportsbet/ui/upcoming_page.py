@@ -44,10 +44,19 @@ def _render_forecast_card(fc, sport: str, *, expanded: bool = False) -> None:
             away_logo_db=fc.away_logo_url,
         )
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("主隊勝率", _pct(fc.home_win_prob))
-        c2.metric("客隊勝率", _pct(fc.away_win_prob))
+        c1.metric("主隊勝率（最終）", _pct(fc.home_win_prob))
+        c2.metric("客隊勝率（最終）", _pct(fc.away_win_prob))
         c3.metric("預估總分", f"{fc.predicted_total:.1f}")
         c4.metric("預估分差", f"{fc.predicted_margin:+.1f}")
+
+        if fc.home_win_prob_base is not None and fc.away_win_prob_base is not None:
+            adj_h = fc.home_injury_adj or 0.0
+            adj_a = fc.away_injury_adj or 0.0
+            st.caption(
+                f"傷兵修正：主隊 {_pct(fc.home_win_prob_base)} → {_pct(fc.home_win_prob)} "
+                f"({adj_h:+.1%})　｜　客隊 {_pct(fc.away_win_prob_base)} → {_pct(fc.away_win_prob)} "
+                f"({adj_a:+.1%})"
+            )
 
         c5, c6, c7 = st.columns(3)
         c5.metric("大小分線", fc.total_line or "—")
@@ -62,8 +71,17 @@ def _render_forecast_card(fc, sport: str, *, expanded: bool = False) -> None:
             _render_injury_impact(fc, "away")
 
         detail = team_detail_dataframe(fc).copy()
-        for col in ["畢達哥拉斯勝率", "賽季勝率", "近況勝率", "Log5單場勝率", "貝氏修正勝率", "最終預測勝率"]:
-            detail[col] = detail[col].map(_pct)
+        pct_cols = [
+            "畢達哥拉斯勝率", "賽季勝率", "近況勝率", "Log5單場勝率", "貝氏修正勝率",
+            "傷兵前勝率", "傷兵修正", "最終預測勝率",
+        ]
+        for col in pct_cols:
+            if col == "傷兵修正":
+                detail[col] = detail[col].map(
+                    lambda x: f"{float(x) * 100:+.1f}%" if pd.notna(x) and x is not None else "—"
+                )
+            else:
+                detail[col] = detail[col].map(_pct)
         st.dataframe(detail, use_container_width=True, hide_index=True)
 
 

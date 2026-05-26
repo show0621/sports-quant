@@ -6,5 +6,7 @@ __pycache__/
 venv/
 logs/
 data/**/*.csv
+# 保留主資料庫於 GitHub（Streamlit Cloud 持久化）
 data/**/*.db
+!data/sportsbet.db
 !data/.gitkeep

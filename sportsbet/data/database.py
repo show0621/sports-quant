@@ -184,6 +184,10 @@ _MIGRATION_COLUMNS = [
     ("game_forecasts", "away_adjusted_rating", "REAL"),
     ("game_forecasts", "home_injury_penalty", "REAL"),
     ("game_forecasts", "away_injury_penalty", "REAL"),
+    ("game_forecasts", "home_win_prob_base", "REAL"),
+    ("game_forecasts", "away_win_prob_base", "REAL"),
+    ("game_forecasts", "home_injury_adj", "REAL"),
+    ("game_forecasts", "away_injury_adj", "REAL"),
 ]
 
 
@@ -487,6 +491,9 @@ class SportsDatabase:
             SELECT match_date, home_team, away_team, status,
                    predicted_winner, actual_winner, pick_correct,
                    home_win_prob, away_win_prob,
+                   home_win_prob_base, away_win_prob_base,
+                   home_injury_adj, away_injury_adj,
+                   home_injury_penalty, away_injury_penalty,
                    home_pyth, away_pyth,
                    home_season_win_pct, away_season_win_pct,
                    home_recent_win_pct, away_recent_win_pct,
@@ -710,6 +717,33 @@ class SportsDatabase:
         sql += " ORDER BY match_date"
         with self.connection() as conn:
             return pd.read_sql_query(sql, conn, params=(sport, start_date, end_date))
+
+    def finalize_games_with_scores(self, sport: Sport) -> int:
+        """將已有比分但狀態未標記 final 的賽事更新為 final。"""
+        with self.connection() as conn:
+            cur = conn.execute(
+                """
+                UPDATE games
+                SET status = 'final'
+                WHERE sport = ?
+                  AND home_score IS NOT NULL
+                  AND away_score IS NOT NULL
+                  AND (status IS NULL OR status NOT IN ('final', 'FT', 'AOT', 'Finished', 'POST'))
+                """,
+                (sport,),
+            )
+            return cur.rowcount
+
+    def count_games_with_scores(self, sport: Sport) -> int:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS n FROM games
+                WHERE sport = ? AND home_score IS NOT NULL AND away_score IS NOT NULL
+                """,
+                (sport,),
+            ).fetchone()
+            return int(row["n"]) if row else 0
 
     def get_backtest_frame(self, sport: Sport) -> pd.DataFrame:
         """已結束賽事 + 預測機率 + 賠率，供評估模組使用。"""

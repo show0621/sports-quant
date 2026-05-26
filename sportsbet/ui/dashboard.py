@@ -27,6 +27,8 @@ from sportsbet.evaluation.evaluator import EvaluationModule  # noqa: E402
 from sportsbet.models.analytics_engine import AnalyticsEngine  # noqa: E402
 from sportsbet.models.forecast import team_detail_dataframe  # noqa: E402
 from sportsbet.risk.ev import RiskManager  # noqa: E402
+from sportsbet.data.db_github_sync import push_database_to_github  # noqa: E402
+from sportsbet.services.data_refresh import run_full_backtest_refresh  # noqa: E402
 from sportsbet.services.prediction_service import PredictionService  # noqa: E402
 from sportsbet.ui.hot_cold_page import page_player_hot_cold  # noqa: E402
 from sportsbet.ui.injury_ticker import render_injury_ticker  # noqa: E402
@@ -49,6 +51,14 @@ def get_db() -> SportsDatabase:
 @st.cache_resource
 def get_prediction_service() -> PredictionService:
     return PredictionService(get_db())
+
+
+def _persist_database(message: str | None = None) -> None:
+    """資料變更後嘗試推送 SQLite 至 GitHub。"""
+    try:
+        push_database_to_github(message=message)
+    except Exception as exc:
+        st.sidebar.caption(f"GitHub 資料庫同步略過：{exc}")
 
 
 def ensure_data(sport: str, *, seed_history: bool, use_mock_only: bool = False) -> None:
@@ -84,38 +94,53 @@ def ensure_data(sport: str, *, seed_history: bool, use_mock_only: bool = False) 
     svc.run_upcoming(sport, days_ahead=7)
 
     if db.get_forecast_review(sport, final_only=True).empty:
-        svc.run_backtest_reconcile(sport)
+        run_full_backtest_refresh(db, sport, sync_api=api_key_configured() and not use_mock_only)
+
+    _persist_database(f"chore(data): auto sync {sport} after load")
 
 
 def build_daily_predictions(sport: str) -> pd.DataFrame:
     db = get_db()
-    engine = AnalyticsEngine(sport)  # type: ignore[arg-type]
+    svc = get_prediction_service()
     risk = RiskManager()
-    stats = db.get_team_stats(sport).set_index("team")
-    board = db.get_daily_board(sport, date.today().isoformat())
-    if board.empty or stats.empty:
+    today = date.today().isoformat()
+    board = db.get_daily_board(sport, today)
+    if board.empty:
         return pd.DataFrame()
 
+    forecasts = {fc.game_id: fc for fc in svc.run_for_date(sport, today) if fc.game_id}
     rows = []
     for _, g in board.drop_duplicates(subset=["game_id", "market", "selection"]).iterrows():
-        ht, at = g["home_team"], g["away_team"]
-        if ht not in stats.index or at not in stats.index:
-            continue
-        h, a = stats.loc[ht], stats.loc[at]
-        pred = engine.predict_matchup(
-            h["rs_per_game"], h["ra_per_game"], a["rs_per_game"], a["ra_per_game"],
-            home_recent_win_pct=h.get("recent_win_pct"),
-            away_recent_win_pct=a.get("recent_win_pct"),
-        )
+        gid = int(g["game_id"])
+        fc = forecasts.get(gid)
         market = g.get("market", "moneyline")
         sel = g.get("selection", "home")
-        if market == "moneyline":
-            prob = pred.home_win_prob if sel == "home" else pred.away_win_prob
+        if fc:
+            if market == "moneyline":
+                prob = fc.home_win_prob if sel == "home" else fc.away_win_prob
+            elif fc.prob_over is not None:
+                prob = fc.prob_over if sel == "over" else fc.prob_under or (1.0 - fc.prob_over)
+            else:
+                continue
         else:
-            line = float(g["handicap"]) if pd.notna(g.get("handicap")) else 220.0
-            prob = engine.prob_total_over(line, pred.lambda_home, pred.lambda_away)
-            if sel == "under":
-                prob = 1.0 - prob
+            stats = db.get_team_stats(sport).set_index("team")
+            ht, at = g["home_team"], g["away_team"]
+            if ht not in stats.index or at not in stats.index:
+                continue
+            h, a = stats.loc[ht], stats.loc[at]
+            engine = AnalyticsEngine(sport)  # type: ignore[arg-type]
+            pred = engine.predict_matchup(
+                h["rs_per_game"], h["ra_per_game"], a["rs_per_game"], a["ra_per_game"],
+                home_recent_win_pct=h.get("recent_win_pct"),
+                away_recent_win_pct=a.get("recent_win_pct"),
+            )
+            if market == "moneyline":
+                prob = pred.home_win_prob if sel == "home" else pred.away_win_prob
+            else:
+                line = float(g["handicap"]) if pd.notna(g.get("handicap")) else 220.0
+                prob = engine.prob_total_over(line, pred.lambda_home, pred.lambda_away)
+                if sel == "under":
+                    prob = 1.0 - prob
         odds = float(g["odds"]) if pd.notna(g.get("odds")) else 1.75
         sig = risk.evaluate(prob, odds)
         rows.append(
@@ -143,9 +168,19 @@ def page_backtest_review(sport: str) -> None:
 
     svc = get_prediction_service()
     if st.button("重新產生全部覆盤紀錄", type="primary"):
-        with st.spinner("計算中…"):
-            svc.run_backtest_reconcile(sport)
-        st.success("覆盤紀錄已更新")
+        with st.spinner("同步歷史賽果、傷兵並重算全部覆盤…"):
+            stats = run_full_backtest_refresh(
+                get_db(), sport,
+                sync_api=True,
+                sync_injuries=True,
+            )
+            _persist_database(f"chore(data): full backtest refresh {sport}")
+        st.success(
+            f"覆盤已更新：{stats.get('forecasts', 0)} 場預測、"
+            f"{stats.get('games_with_scores', 0)} 場有比分、"
+            f"{stats.get('predictions', 0)} 筆投注紀錄"
+        )
+        st.cache_resource.clear()
         st.rerun()
 
     review = svc.get_review_table(sport, final_only=True)
@@ -169,8 +204,12 @@ def page_backtest_review(sport: str) -> None:
             "away_team": "客隊",
             "predicted_winner": "預測勝者",
             "actual_winner": "實際勝者",
-            "home_win_prob": "主隊預測勝率",
-            "away_win_prob": "客隊預測勝率",
+            "home_win_prob": "主隊勝率(最終)",
+            "away_win_prob": "客隊勝率(最終)",
+            "home_win_prob_base": "主隊勝率(傷兵前)",
+            "away_win_prob_base": "客隊勝率(傷兵前)",
+            "home_injury_adj": "主隊傷兵修正",
+            "away_injury_adj": "客隊傷兵修正",
             "predicted_home_score": "預測主隊分",
             "predicted_away_score": "預測客隊分",
             "actual_home_score": "實際主隊分",
@@ -183,16 +222,23 @@ def page_backtest_review(sport: str) -> None:
             "total_line": "大小分線",
         }
     )
-    pct_cols = ["主隊預測勝率", "客隊預測勝率", "大分機率"]
+    pct_cols = [
+        "主隊勝率(最終)", "客隊勝率(最終)", "主隊勝率(傷兵前)", "客隊勝率(傷兵前)", "大分機率",
+    ]
+    adj_cols = ["主隊傷兵修正", "客隊傷兵修正"]
     for col in pct_cols:
         if col in display.columns:
             display[col] = display[col].map(_pct)
+    for col in adj_cols:
+        if col in display.columns:
+            display[col] = display[col].map(lambda x: f"{float(x)*100:+.1f}%" if pd.notna(x) else "—")
 
     show_cols = [
         c
         for c in [
             "日期", "主隊", "客隊", "預測勝者", "實際勝者", "預測正確",
-            "主隊預測勝率", "客隊預測勝率",
+            "主隊勝率(傷兵前)", "主隊傷兵修正", "主隊勝率(最終)",
+            "客隊勝率(傷兵前)", "客隊傷兵修正", "客隊勝率(最終)",
             "預測主隊分", "預測客隊分", "實際主隊分", "實際客隊分",
             "預測總分", "預測分差", "分差誤差", "總分誤差", "大小分線", "大分機率",
         ]
@@ -391,8 +437,9 @@ def main() -> None:
                 provider.fetch_daily_schedule(sport, d)
             provider.fetch_odds(sport)
             svc_pred.run_upcoming(sport, days_ahead=7)
-            svc_pred.run_backtest_reconcile(sport)
-            st.sidebar.success("同步完成")
+            run_full_backtest_refresh(db, sport, sync_api=True, sync_injuries=True)
+            _persist_database(f"chore(data): API sync {sport}")
+            st.sidebar.success("同步完成（含傷兵與覆盤）")
             st.cache_resource.clear()
             st.rerun()
 
@@ -409,6 +456,8 @@ def main() -> None:
         if seed or not api_key_configured():
             provider.seed_historical_backtest(sport, days=60)
         sync_v2_player_data(db, sport)
+        run_full_backtest_refresh(db, sport, sync_api=False, sync_injuries=False)
+        _persist_database(f"chore(data): mock reload {sport}")
         st.sidebar.success("MOCK 資料已更新")
         st.cache_resource.clear()
         st.rerun()

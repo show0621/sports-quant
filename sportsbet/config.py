@@ -75,6 +75,10 @@ ROSTER_RATING_BLEND = float(os.getenv("ROSTER_RATING_BLEND", "0.35"))  # 與畢�
 INJURY_EXCLUDE_STATUSES = ("Out", "Doubtful")
 INJURY_DISCOUNT = {"Questionable": 0.5, "Probable": 0.85}
 
+# --- GitHub 資料庫持久化 ---
+GITHUB_DB_SYNC_ENABLED = os.getenv("GITHUB_DB_SYNC_ENABLED", "true").lower() == "true"
+GITHUB_REPO_REMOTE = os.getenv("GITHUB_REPO_REMOTE", "https://github.com/show0621/sports-quant.git")
+
 # --- 威剛爬蟲（舊 HTML；現以運彩 Blob + JBot 為主） ---
 WANDA_BASE_URL = os.getenv("WANDA_BASE_URL", "https://www.twsport.com.tw")
 WANDA_REQUEST_DELAY_SEC = float(os.getenv("WANDA_REQUEST_DELAY_SEC", "1.5"))
