@@ -53,15 +53,15 @@ def _render_forecast_card(fc, sport: str, *, expanded: bool = False) -> None:
         c5.metric("大小分線", fc.total_line or "—")
         c6.metric("大分機率", _pct(fc.prob_over))
         c7.metric("小分機率", _pct(fc.prob_under))
-            st.caption(fc.margin_note)
+        st.caption(fc.margin_note)
 
-            ic1, ic2 = st.columns(2)
-            with ic1:
-                _render_injury_impact(fc, "home")
-            with ic2:
-                _render_injury_impact(fc, "away")
+        ic1, ic2 = st.columns(2)
+        with ic1:
+            _render_injury_impact(fc, "home")
+        with ic2:
+            _render_injury_impact(fc, "away")
 
-            detail = team_detail_dataframe(fc).copy()
+        detail = team_detail_dataframe(fc).copy()
         for col in ["畢達哥拉斯勝率", "賽季勝率", "近況勝率", "Log5單場勝率", "貝氏修正勝率", "最終預測勝率"]:
             detail[col] = detail[col].map(_pct)
         st.dataframe(detail, use_container_width=True, hide_index=True)
