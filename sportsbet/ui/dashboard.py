@@ -136,18 +136,18 @@ def build_daily_predictions(sport: str) -> pd.DataFrame:
     for _, g in board.drop_duplicates(subset=["game_id", "market", "selection"]).iterrows():
         gid = int(g["game_id"])
         fc = forecasts.get(gid)
+        ht, at = g["home_team"], g["away_team"]
         market = g.get("market", "moneyline")
         sel = g.get("selection", "home")
         if fc:
             if market == "moneyline":
                 prob = fc.home_win_prob if sel == "home" else fc.away_win_prob
             elif fc.prob_over is not None:
-                prob = fc.prob_over if sel == "over" else fc.prob_under or (1.0 - fc.prob_over)
+                prob = fc.prob_over if sel == "over" else (fc.prob_under if fc.prob_under is not None else (1.0 - fc.prob_over))
             else:
                 continue
         else:
             stats = db.get_team_stats(sport).set_index("team")
-            ht, at = g["home_team"], g["away_team"]
             if ht not in stats.index or at not in stats.index:
                 continue
             h, a = stats.loc[ht], stats.loc[at]
