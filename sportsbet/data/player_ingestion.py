@@ -180,7 +180,34 @@ class EspnInjuryProvider(PlayerDataProvider):
 
 
 def sync_v2_player_data(db: SportsDatabase, sport: str, *, days_lineup: int = 7) -> dict[str, int]:
-    """一次同步 V2 球員層資料。"""
+    """一次同步 V2 球員層資料（傷兵優先用 ESPN；無 API 時才用 MOCK）。"""
+
+    from sportsbet.data.provider import api_key_configured
+
+    # 若你有 API-Sports：用 ESPN 公開傷兵端點（不需金鑰），並用 ESPN roster 建立 projected_lineups
+    if api_key_configured():
+        from sportsbet.data.espn_injuries import (
+            EspnInjuryClient,
+            sync_espn_injuries,
+            sync_espn_projected_lineups,
+        )
+
+        match_dates = [(date.today() + timedelta(days=i)).isoformat() for i in range(days_lineup)]
+        client = EspnInjuryClient()
+
+        # 清掉舊資料，避免 MOCK 與 ESPN 混在一起
+        db.clear_injuries(sport)
+
+        injuries_n = sync_espn_injuries(db, sport, report_date=date.today().isoformat(), client=client)
+        lineups_n = sync_espn_projected_lineups(
+            db,
+            sport,
+            match_dates=match_dates,
+            client=client,
+        )
+        return {"players": 0, "injuries": injuries_n, "lineups": lineups_n}
+
+    # 無 API：完全使用 MOCK
     provider = MockPlayerDataProvider(db)
     out = {
         "players": provider.fetch_players_and_stats(sport),

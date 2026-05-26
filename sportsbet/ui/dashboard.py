@@ -76,7 +76,9 @@ def ensure_data(sport: str, *, seed_history: bool, use_mock_only: bool = False) 
 
     svc = get_prediction_service()
     svc.run_upcoming(sport, days_ahead=7)
-    if db.get_injuries(sport).empty and not api_key_configured():
+    inj_df = db.get_injuries(sport)
+    # 若資料庫尚無傷兵，或目前全是 MOCK（先前載入過示範），改用 ESPN 更新
+    if inj_df.empty or ("source" in inj_df.columns and not inj_df.empty and (inj_df["source"] == "mock").all()):
         sync_v2_player_data(db, sport)
 
     if db.get_forecast_review(sport, final_only=True).empty:
@@ -410,16 +412,19 @@ def main() -> None:
         st.rerun()
 
     with st.sidebar.expander("傷兵示範 (MOCK)", expanded=False):
-        st.caption("API-Sports 尚無傷兵端點；僅供介面示範。")
-        db_inj = get_db()
-        if st.button("載入示範傷兵", key="load_mock_inj"):
-            sync_v2_player_data(db_inj, sport)
-            st.success("已載入示範傷兵")
-            st.rerun()
-        if st.button("清除示範傷兵", key="clear_mock_inj"):
-            n = db_inj.clear_injuries(sport, source="mock")
-            st.success(f"已清除 {n} 筆")
-            st.rerun()
+        if api_key_configured():
+            st.caption("已啟用即時傷兵（ESPN）。MOCK 示範僅供未設定 API-Sports 時使用。")
+        else:
+            st.caption("目前使用 MOCK 示範傷兵（介面展示）。")
+            db_inj = get_db()
+            if st.button("載入示範傷兵", key="load_mock_inj"):
+                sync_v2_player_data(db_inj, sport)
+                st.success("已載入示範傷兵")
+                st.rerun()
+            if st.button("清除示範傷兵", key="clear_mock_inj"):
+                n = db_inj.clear_injuries(sport, source="mock")
+                st.success(f"已清除 {n} 筆")
+                st.rerun()
 
     ensure_data(sport, seed_history=seed)
 

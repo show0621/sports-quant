@@ -110,6 +110,50 @@ def canonical_team_name(team: str, sport: Sport) -> str:
     return aliases.get(team, team)
 
 
+def resolve_team_in_database(db, sport: Sport, candidate: str) -> str:
+    """
+    將 ESPN / API-Sports / MOCK 隊名對齊至資料庫既有寫法。
+    若 DB 尚無該隊，回傳 canonical 全名供新資料寫入。
+    """
+    from sportsbet.data.database import SportsDatabase
+
+    if not isinstance(db, SportsDatabase):
+        db = SportsDatabase()
+
+    name = canonical_team_name(candidate.strip(), sport)
+    with db.connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT team FROM (
+                SELECT home_team AS team FROM games WHERE sport = ?
+                UNION SELECT away_team FROM games WHERE sport = ?
+                UNION SELECT team FROM team_stats WHERE sport = ?
+                UNION SELECT team FROM players WHERE sport = ?
+            )
+            """,
+            (sport,),
+        ).fetchall()
+    known = {r[0] for r in rows if r[0]}
+
+    if not known:
+        return name
+    if name in known:
+        return name
+    if candidate in known:
+        return candidate
+
+    low = name.lower()
+    for k in known:
+        if k.lower() == low:
+            return k
+
+    last = name.split()[-1].lower()
+    matches = [k for k in known if k.split()[-1].lower() == last]
+    if len(matches) == 1:
+        return matches[0]
+    return name
+
+
 def espn_logo_url(team: str, sport: Sport) -> str | None:
     name = canonical_team_name(team, sport)
     abbr_map = NBA_ESPN if sport == "nba" else MLB_ESPN
