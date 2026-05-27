@@ -56,11 +56,25 @@ class ApiSportsClient:
 
     def _get(self, sport: Sport, endpoint: str, params: dict | None = None) -> dict[str, Any]:
         url = f"{self._base_url(sport)}/{endpoint.lstrip('/')}"
-        resp = requests.get(url, headers=self._headers(), params=params or {}, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get("errors"):
-            logger.error("API-Sports errors: %s", data["errors"])
+        try:
+            resp = requests.get(url, headers=self._headers(), params=params or {}, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+        except requests.RequestException as exc:
+            raise RuntimeError(f"API-Sports 請求失敗：{exc}") from exc
+        except ValueError as exc:
+            raise RuntimeError("API-Sports 回傳非 JSON 格式，請稍後再試。") from exc
+
+        errors = data.get("errors")
+        if errors:
+            logger.error("API-Sports errors: %s", errors)
+            if isinstance(errors, dict):
+                detail = "; ".join(f"{k}: {v}" for k, v in errors.items())
+            elif isinstance(errors, list):
+                detail = "; ".join(str(e) for e in errors)
+            else:
+                detail = str(errors)
+            raise RuntimeError(f"API-Sports 回傳錯誤：{detail}")
         return data
 
     def fetch_games(

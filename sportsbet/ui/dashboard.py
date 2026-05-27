@@ -420,6 +420,13 @@ def page_bankroll(sport: str) -> None:
 def main() -> None:
     st.sidebar.title("運彩量化看板")
     sport = st.sidebar.selectbox("運動", ["nba", "mlb"])
+    st.session_state.setdefault("last_api_error", "")
+
+    def _show_sidebar_api_error(exc: Exception, *, prefix: str = "同步失敗") -> None:
+        msg = str(exc).strip() or exc.__class__.__name__
+        full = f"{prefix}：{msg}"
+        st.session_state["last_api_error"] = full
+        st.sidebar.error(full)
 
     if not api_key_configured():
         st.sidebar.error("未設定 API_SPORTS_KEY。系統已停用 MOCK，請先設定真實 API 金鑰。")
@@ -430,31 +437,44 @@ def main() -> None:
         if not api_key_configured():
             st.sidebar.error("請先在 Secrets 或 .env 設定 API_SPORTS_KEY")
         else:
-            db = get_db()
-            provider = get_data_provider(db)
-            with st.spinner("同步中…"):
-                from sportsbet.data.api_sports import ApiSportsClient, infer_season
+            try:
+                db = get_db()
+                provider = get_data_provider(db)
+                with st.spinner("同步中…"):
+                    from sportsbet.data.api_sports import ApiSportsClient, infer_season
 
-                season = infer_season(sport)  # type: ignore[arg-type]
-                client = ApiSportsClient()
-                if client.is_configured:
-                    client.sync_team_logos(get_db(), sport, season)
-                provider.fetch_historical_stats(sport, season)
-                provider.fetch_daily_schedule(sport)
+                    season = infer_season(sport)  # type: ignore[arg-type]
+                    client = ApiSportsClient()
+                    if client.is_configured:
+                        client.sync_team_logos(get_db(), sport, season)
+                    provider.fetch_historical_stats(sport, season)
+                    provider.fetch_daily_schedule(sport)
+                    provider.fetch_odds(sport)
+                svc_pred = get_prediction_service()
+                for offset in range(7):
+                    d = (date.today() + timedelta(days=offset)).isoformat()
+                    provider.fetch_daily_schedule(sport, d)
                 provider.fetch_odds(sport)
-            svc_pred = get_prediction_service()
-            for offset in range(7):
-                d = (date.today() + timedelta(days=offset)).isoformat()
-                provider.fetch_daily_schedule(sport, d)
-            provider.fetch_odds(sport)
-            svc_pred.run_upcoming(sport, days_ahead=7)
-            run_full_backtest_refresh(db, sport, sync_api=True, sync_injuries=True)
-            _persist_database(f"chore(data): API sync {sport}")
-            st.sidebar.success("同步完成（含傷兵與覆盤）")
-            st.cache_resource.clear()
-            st.rerun()
+                svc_pred.run_upcoming(sport, days_ahead=7)
+                run_full_backtest_refresh(db, sport, sync_api=True, sync_injuries=True)
+                _persist_database(f"chore(data): API sync {sport}")
+                st.session_state["last_api_error"] = ""
+                st.sidebar.success("同步完成（含傷兵與覆盤）")
+                st.cache_resource.clear()
+                st.rerun()
+            except Exception as exc:
+                _show_sidebar_api_error(exc)
 
-    ensure_data(sport)
+    try:
+        ensure_data(sport)
+        if st.session_state.get("last_api_error"):
+            st.session_state["last_api_error"] = ""
+    except Exception as exc:
+        _show_sidebar_api_error(exc, prefix="資料載入失敗")
+        st.stop()
+
+    if st.session_state.get("last_api_error"):
+        st.sidebar.error(st.session_state["last_api_error"])
 
     render_injury_ticker(get_db(), sport)
 

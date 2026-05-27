@@ -1,69 +1,39 @@
-"""資料抓取與持久化。"""
+"""資料抓取與持久化。
+
+避免在 package import 階段就載入所有子模組，降低循環匯入/死結風險。
+"""
+from __future__ import annotations
+
+from importlib import import_module
+from typing import Any
+
+_SYMBOL_MAP = {
+    "ApiSportsClient": "sportsbet.data.api_sports",
+    "SportsDatabase": "sportsbet.data.database",
+    "DataIngestionProvider": "sportsbet.data.ingestion",
+    "ApiSportsIngestionAdapter": "sportsbet.data.ingestion",
+    "get_data_provider": "sportsbet.data.provider",
+    "api_key_configured": "sportsbet.data.provider",
+    "JBotClient": "sportsbet.data.jbot",
+    "SportLotteryClient": "sportsbet.data.sportslottery",
+    "STANDARD_ODDS_COLUMNS": "sportsbet.data.sportslottery",
+    "WandaScraper": "sportsbet.data.wanda_scraper",
+    "build_backtest_dataset": "sportsbet.data.timeline",
+    "merge_timeline": "sportsbet.data.timeline",
+    "load_games": "sportsbet.data.storage",
+    "save_games": "sportsbet.data.storage",
+    "save_odds": "sportsbet.data.storage",
+    "load_odds_history": "sportsbet.data.storage",
+    "save_timeline": "sportsbet.data.storage",
+    "load_timeline": "sportsbet.data.storage",
+}
+
+__all__ = list(_SYMBOL_MAP.keys())
 
 
-
-from sportsbet.data.api_sports import ApiSportsClient
-from sportsbet.data.database import SportsDatabase
-from sportsbet.data.ingestion import ApiSportsIngestionAdapter, DataIngestionProvider
-from sportsbet.data.provider import api_key_configured, get_data_provider
-from sportsbet.data.jbot import JBotClient
-
-from sportsbet.data.sportslottery import SportLotteryClient, STANDARD_ODDS_COLUMNS
-
-from sportsbet.data.storage import (
-
-    load_games,
-
-    load_odds_history,
-
-    load_timeline,
-
-    save_games,
-
-    save_odds,
-
-    save_timeline,
-
-)
-
-from sportsbet.data.timeline import build_backtest_dataset, merge_timeline
-
-from sportsbet.data.wanda_scraper import WandaScraper
-
-
-
-__all__ = [
-
-    "ApiSportsClient",
-    "SportsDatabase",
-    "DataIngestionProvider",
-    "ApiSportsIngestionAdapter",
-    "get_data_provider",
-    "api_key_configured",
-
-    "JBotClient",
-
-    "SportLotteryClient",
-
-    "STANDARD_ODDS_COLUMNS",
-
-    "WandaScraper",
-
-    "build_backtest_dataset",
-
-    "merge_timeline",
-
-    "load_games",
-
-    "save_games",
-
-    "save_odds",
-
-    "load_odds_history",
-
-    "save_timeline",
-
-    "load_timeline",
-
-]
-
+def __getattr__(name: str) -> Any:
+    module_name = _SYMBOL_MAP.get(name)
+    if not module_name:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module = import_module(module_name)
+    return getattr(module, name)
