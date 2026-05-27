@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from sportsbet.data.database import Sport, SportsDatabase
+from sportsbet.data.sportslottery_odds import SportLotteryOddsMixin
 
 logger = logging.getLogger(__name__)
 
@@ -229,7 +230,7 @@ class MockDataProvider(DataIngestionProvider):
         return self.db.get_backtest_frame(sport)
 
 
-class ApiSportsIngestionAdapter(DataIngestionProvider):
+class ApiSportsIngestionAdapter(SportLotteryOddsMixin, DataIngestionProvider):
     """API-Sports 賽程/統計 + 台灣運彩 Blob 賠率。"""
 
     def __init__(
@@ -259,56 +260,3 @@ class ApiSportsIngestionAdapter(DataIngestionProvider):
             logger.warning("API-Sports 未回傳球隊統計，賽季=%s", season_int)
         return stats
 
-    def fetch_odds(self, sport: SportLit, match_date: str | None = None) -> pd.DataFrame:
-        d = match_date or date.today().isoformat()
-        rows = self._fetch_sportslottery_odds(sport, d)
-        if not rows.empty:
-            return rows
-        logger.warning("運彩 Blob 無賠率，API-only 模式不再使用 MOCK 補值")
-        return pd.DataFrame()
-
-    def _fetch_sportslottery_odds(self, sport: SportLit, match_date: str) -> pd.DataFrame:
-        from sportsbet.data.sportslottery import SportLotteryClient
-        from sportsbet.data.team_names import normalize_matchup
-
-        try:
-            client = SportLotteryClient()
-            odds_df = client.fetch_all(sports={sport})
-        except Exception as exc:
-            logger.warning("運彩 Blob 抓取失敗: %s", exc)
-            return pd.DataFrame()
-
-        if odds_df.empty:
-            return odds_df
-
-        odds_df = odds_df.copy()
-        odds_df[["home_team", "away_team"]] = odds_df.apply(
-            lambda r: pd.Series(normalize_matchup(r["home_team"], r["away_team"], sport)),
-            axis=1,
-        )
-        if "match_date" in odds_df.columns:
-            odds_df = odds_df[odds_df["match_date"].astype(str).str[:10] == d]
-
-        games = self.db.get_games(sport, d)
-        if games.empty:
-            return pd.DataFrame()
-
-        inserted = []
-        for _, o in odds_df.iterrows():
-            match = games[
-                (games["home_team"] == o["home_team"]) & (games["away_team"] == o["away_team"])
-            ]
-            if match.empty:
-                continue
-            gid = int(match.iloc[0]["id"])
-            self.db.insert_odds(
-                gid,
-                str(o.get("market", "moneyline")),
-                str(o.get("selection", "home")),
-                float(o["odds"]),
-                handicap=float(o["handicap"]) if pd.notna(o.get("handicap")) else None,
-                bookmaker="sportslottery",
-            )
-            inserted.append({**o.to_dict(), "game_id": gid})
-
-        return pd.DataFrame(inserted)

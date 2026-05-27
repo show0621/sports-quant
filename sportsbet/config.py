@@ -28,6 +28,9 @@ API_SPORTS_LEAGUE_MLB = int(os.getenv("API_SPORTS_LEAGUE_MLB", "1"))
 API_SPORTS_SEASON_MIN = int(os.getenv("API_SPORTS_SEASON_MIN", "2022"))
 API_SPORTS_SEASON_MAX = int(os.getenv("API_SPORTS_SEASON_MAX", "2024"))
 
+# hybrid（預設）| api_sports
+DATA_SOURCE = os.getenv("DATA_SOURCE", "hybrid").strip().lower()
+
 
 def resolve_api_sports_key() -> str:
     """從 .env 或 Streamlit Secrets 讀取 API-Sports 金鑰。"""

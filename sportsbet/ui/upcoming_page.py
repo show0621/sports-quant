@@ -102,8 +102,8 @@ def page_current_future_predictions(sport: str, svc: PredictionService) -> None:
     forecasts = svc.run_upcoming(sport, days_ahead=days_ahead)
     if not forecasts:
         st.warning(
-            "尚無現在或未來賽程。請在側欄按「同步 API-Sports + 運彩賠率」，"
-            "系統會自動抓取今日起算的多日賽程。"
+            "尚無現在或未來賽程。請在側欄按「同步資料（賽程 + 賠率 + 覆盤）」，"
+            "系統會從 nba_api/ESPN 抓取今日起算的多日賽程。"
         )
         return
 

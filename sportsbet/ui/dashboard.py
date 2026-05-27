@@ -21,7 +21,7 @@ if str(ROOT) not in sys.path:
 from sportsbet import config  # noqa: E402
 from sportsbet.data.database import SportsDatabase  # noqa: E402
 from sportsbet.data.player_ingestion import sync_v2_player_data  # noqa: E402
-from sportsbet.data.provider import api_key_configured, get_data_provider  # noqa: E402
+from sportsbet.data.provider import api_key_configured, describe_data_source, get_data_provider  # noqa: E402
 from sportsbet.evaluation.evaluator import EvaluationModule  # noqa: E402
 from sportsbet.models.analytics_engine import AnalyticsEngine  # noqa: E402
 from sportsbet.models.forecast import team_detail_dataframe  # noqa: E402
@@ -64,9 +64,9 @@ def ensure_data(sport: str) -> None:
     db = get_db()
     provider = get_data_provider(db)
     season = None
-    from sportsbet.data.api_sports import infer_season
+    from sportsbet.data.api_sports import calendar_season
 
-    season = infer_season(sport)  # type: ignore[arg-type]
+    season = calendar_season(sport)  # type: ignore[arg-type]
 
     if db.get_team_stats(sport).empty:
         provider.fetch_historical_stats(sport, season)
@@ -428,53 +428,42 @@ def main() -> None:
         st.session_state["last_api_error"] = full
         st.sidebar.error(full)
 
-    if not api_key_configured():
-        st.sidebar.error("未設定 API_SPORTS_KEY。系統已停用 MOCK，請先設定真實 API 金鑰。")
-        st.stop()
-    st.sidebar.success("API-Sports 已設定（API-only 模式）")
+    st.sidebar.caption(describe_data_source(sport))
+    if api_key_configured():
+        st.sidebar.success("API-Sports 金鑰已設定（作為備援）")
+    else:
+        st.sidebar.info("未設定 API-Sports：使用 nba_api + ESPN + 運彩 Blob（免費混合模式）")
+
     from sportsbet import config as app_config
     from sportsbet.data.api_sports import calendar_season, infer_season, season_clamped
 
-    api_season = infer_season(sport)  # type: ignore[arg-type]
-    if season_clamped(sport):  # type: ignore[arg-type]
-        st.sidebar.info(
-            f"API 免費方案賽季僅 {app_config.API_SPORTS_SEASON_MIN}–"
-            f"{app_config.API_SPORTS_SEASON_MAX}；歷史同步用 {api_season}，"
-            f"今日賽程以日期查詢（實際賽季 {calendar_season(sport)}）。"
-            " 付費後可在 Secrets 設定 API_SPORTS_SEASON_MAX。"
+    if api_key_configured() and season_clamped(sport):  # type: ignore[arg-type]
+        st.sidebar.warning(
+            f"API 免費方案僅 {app_config.API_SPORTS_SEASON_MIN}–{app_config.API_SPORTS_SEASON_MAX}；"
+            f"當季 {calendar_season(sport)} 改由 nba_api/ESPN。"
         )
 
-    if st.sidebar.button("同步 API-Sports + 運彩賠率"):
-        if not api_key_configured():
-            st.sidebar.error("請先在 Secrets 或 .env 設定 API_SPORTS_KEY")
-        else:
-            try:
-                db = get_db()
-                provider = get_data_provider(db)
-                with st.spinner("同步中…"):
-                    from sportsbet.data.api_sports import ApiSportsClient, infer_season
-
-                    season = infer_season(sport)  # type: ignore[arg-type]
-                    client = ApiSportsClient()
-                    if client.is_configured:
-                        client.sync_team_logos(get_db(), sport, season)
-                    provider.fetch_historical_stats(sport, season)
-                    provider.fetch_daily_schedule(sport)
-                    provider.fetch_odds(sport)
-                svc_pred = get_prediction_service()
+    if st.sidebar.button("同步資料（賽程 + 賠率 + 覆盤）", type="primary"):
+        try:
+            db = get_db()
+            provider = get_data_provider(db)
+            season = calendar_season(sport)  # type: ignore[arg-type]
+            with st.spinner("同步中（nba_api/ESPN/運彩 Blob）…"):
+                provider.fetch_historical_stats(sport, season)
                 for offset in range(7):
                     d = (date.today() + timedelta(days=offset)).isoformat()
                     provider.fetch_daily_schedule(sport, d)
-                provider.fetch_odds(sport)
-                svc_pred.run_upcoming(sport, days_ahead=7)
-                run_full_backtest_refresh(db, sport, sync_api=True, sync_injuries=True)
-                _persist_database(f"chore(data): API sync {sport}")
-                st.session_state["last_api_error"] = ""
-                st.sidebar.success("同步完成（含傷兵與覆盤）")
-                st.cache_resource.clear()
-                st.rerun()
-            except Exception as exc:
-                _show_sidebar_api_error(exc)
+                    provider.fetch_odds(sport, d)
+            svc_pred = get_prediction_service()
+            svc_pred.run_upcoming(sport, days_ahead=7)
+            run_full_backtest_refresh(db, sport, sync_api=True, sync_injuries=True)
+            _persist_database(f"chore(data): hybrid sync {sport}")
+            st.session_state["last_api_error"] = ""
+            st.sidebar.success("同步完成（含傷兵與覆盤）")
+            st.cache_resource.clear()
+            st.rerun()
+        except Exception as exc:
+            _show_sidebar_api_error(exc)
 
     try:
         ensure_data(sport)

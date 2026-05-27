@@ -1,20 +1,27 @@
-"""僅使用 API-Sports 資料來源（API-only）。"""
+"""資料來源選擇：混合模式（預設）或純 API-Sports。"""
 from __future__ import annotations
 
 from sportsbet import config
 from sportsbet.data.api_sports import ApiSportsClient
 from sportsbet.data.database import SportsDatabase
-from sportsbet.data.ingestion import ApiSportsIngestionAdapter, DataIngestionProvider
-
-
-def get_data_provider(db: SportsDatabase | None = None) -> DataIngestionProvider:
-    """僅在 API_SPORTS_KEY 可用時回傳 API provider。"""
-    db = db or SportsDatabase()
-    client = ApiSportsClient()
-    if not client.is_configured:
-        raise RuntimeError("API_SPORTS_KEY 未設定，系統已停用 MOCK，請先設定真實 API 金鑰。")
-    return ApiSportsIngestionAdapter(db=db, client=client)
+from sportsbet.data.hybrid_provider import HybridIngestionProvider, data_source_description
+from sportsbet.data.ingestion import ApiSportsIngestionAdapter, DataIngestionProvider, SportLit
 
 
 def api_key_configured() -> bool:
     return bool(config.resolve_api_sports_key())
+
+
+def get_data_provider(db: SportsDatabase | None = None) -> DataIngestionProvider:
+    db = db or SportsDatabase()
+    mode = config.DATA_SOURCE
+    if mode == "api_sports":
+        client = ApiSportsClient()
+        if not client.is_configured:
+            raise RuntimeError("DATA_SOURCE=api_sports 但未設定 API_SPORTS_KEY。")
+        return ApiSportsIngestionAdapter(db=db, client=client)
+    return HybridIngestionProvider(db=db)
+
+
+def describe_data_source(sport: SportLit = "nba") -> str:
+    return data_source_description(sport)

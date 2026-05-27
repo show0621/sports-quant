@@ -6,7 +6,8 @@ from typing import Literal
 
 import pandas as pd
 from sportsbet.data.database import SportsDatabase
-from sportsbet.data.provider import api_key_configured
+from sportsbet.data.api_sports import calendar_season
+from sportsbet.data.provider import get_data_provider
 from sportsbet.risk.ev import RiskManager
 from sportsbet.services.prediction_service import PredictionService
 
@@ -16,20 +17,11 @@ Sport = Literal["nba", "mlb"]
 
 
 def sync_historical_games(db: SportsDatabase, sport: Sport) -> int:
-    """從 API-Sports 同步整季賽程與賽果；無 API 時回傳既有筆數。"""
+    """混合來源同步歷史賽程與賽果（nba_api / ESPN / API-Sports）。"""
     before = db.count_games_with_scores(sport)
-    if not api_key_configured():
-        return before
-
-    from sportsbet.data.api_sports import ApiSportsClient, infer_season
-
-    client = ApiSportsClient()
-    if not client.is_configured:
-        return before
-
-    season = infer_season(sport)
-    client.sync_team_logos(db, sport, season)
-    client.sync_to_database(db, sport, season)
+    provider = get_data_provider(db)
+    season = calendar_season(sport)
+    provider.fetch_historical_stats(sport, season)
     finalized = db.finalize_games_with_scores(sport)
     after = db.count_games_with_scores(sport)
     logger.info(
@@ -126,8 +118,10 @@ def run_full_backtest_refresh(
     review = svc.run_backtest_reconcile(sport)
     out["forecasts"] = len(review)
 
-    if review.empty and not api_key_configured():
-        raise RuntimeError("API-only 模式下未設定 API_SPORTS_KEY，無法建立覆盤資料。")
+    if review.empty and db.count_games_with_scores(sport) == 0:
+        raise RuntimeError(
+            "無法建立覆盤：尚無已結束賽事。請按側欄「同步資料」或確認網路與資料來源。"
+        )
 
     out["predictions"] = rebuild_predictions_from_forecasts(db, sport)
     svc.run_upcoming(sport, days_ahead=days_lineup)
