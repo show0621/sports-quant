@@ -24,6 +24,9 @@ API_SPORTS_BASE = "https://v1.basketball.api-sports.io"  # NBA
 API_SPORTS_MLB_BASE = "https://v1.baseball.api-sports.io"  # MLB
 API_SPORTS_LEAGUE_NBA = int(os.getenv("API_SPORTS_LEAGUE_NBA", "12"))
 API_SPORTS_LEAGUE_MLB = int(os.getenv("API_SPORTS_LEAGUE_MLB", "1"))
+# 免費方案通常僅 2022–2024；付費後可調高 API_SPORTS_SEASON_MAX
+API_SPORTS_SEASON_MIN = int(os.getenv("API_SPORTS_SEASON_MIN", "2022"))
+API_SPORTS_SEASON_MAX = int(os.getenv("API_SPORTS_SEASON_MAX", "2024"))
 
 
 def resolve_api_sports_key() -> str:

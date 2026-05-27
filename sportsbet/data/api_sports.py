@@ -26,12 +26,24 @@ Sport = Literal["nba", "mlb"]
 FINISHED_STATUS = {"FT", "AOT", "Finished", "AFTER_OT", "POST", "closed"}
 
 
-def infer_season(sport: Sport, on_date: date | None = None) -> int:
-    """API-Sports 賽季參數為賽季「起始年」（如 2024-25 → 2024）。"""
+def calendar_season(sport: Sport, on_date: date | None = None) -> int:
+    """依日期推算實際賽季起始年（未套用 API 方案限制）。"""
     d = on_date or date.today()
     if sport == "nba":
         return d.year if d.month >= 10 else d.year - 1
     return d.year if d.month >= 3 else d.year - 1
+
+
+def infer_season(sport: Sport, on_date: date | None = None) -> int:
+    """API-Sports 賽季參數（起始年），並限制在帳號可存取範圍內。"""
+    raw = calendar_season(sport, on_date)
+    return max(config.API_SPORTS_SEASON_MIN, min(config.API_SPORTS_SEASON_MAX, raw))
+
+
+def season_clamped(sport: Sport, on_date: date | None = None) -> bool:
+    """實際賽季是否因 API 方案上限而被壓縮。"""
+    d = on_date or date.today()
+    return calendar_season(sport, d) != infer_season(sport, d)
 
 
 def _league_id(sport: Sport) -> int:
@@ -129,13 +141,15 @@ class ApiSportsClient:
     ) -> pd.DataFrame:
         """抓取指定日期賽程（含已結束與未開賽）。"""
         d = date.fromisoformat(match_date)
+        cal = calendar_season(sport, d)
         season = season or infer_season(sport, d)
         lid = league_id or _league_id(sport)
-        data = self._get(
-            sport,
-            "games",
-            {"league": lid, "season": season, "date": match_date},
-        )
+        # 免費方案無法查「當季」參數時，改只用 league + date（仍可抓今日/未來場次）
+        if cal > config.API_SPORTS_SEASON_MAX or cal < config.API_SPORTS_SEASON_MIN:
+            params: dict[str, Any] = {"league": lid, "date": match_date}
+        else:
+            params = {"league": lid, "season": cal, "date": match_date}
+        data = self._get(sport, "games", params)
         rows = []
         for item in data.get("response", []):
             teams = item.get("teams", {})
@@ -147,7 +161,7 @@ class ApiSportsClient:
                 {
                     "game_id": item.get("id"),
                     "date": (item.get("date") or match_date)[:10],
-                    "season": season,
+                    "season": cal,
                     "home_team": home.get("name"),
                     "away_team": away.get("name"),
                     "home_score": _extract_total(scores.get("home", {})),

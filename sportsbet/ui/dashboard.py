@@ -432,6 +432,17 @@ def main() -> None:
         st.sidebar.error("未設定 API_SPORTS_KEY。系統已停用 MOCK，請先設定真實 API 金鑰。")
         st.stop()
     st.sidebar.success("API-Sports 已設定（API-only 模式）")
+    from sportsbet import config as app_config
+    from sportsbet.data.api_sports import calendar_season, infer_season, season_clamped
+
+    api_season = infer_season(sport)  # type: ignore[arg-type]
+    if season_clamped(sport):  # type: ignore[arg-type]
+        st.sidebar.info(
+            f"API 免費方案賽季僅 {app_config.API_SPORTS_SEASON_MIN}–"
+            f"{app_config.API_SPORTS_SEASON_MAX}；歷史同步用 {api_season}，"
+            f"今日賽程以日期查詢（實際賽季 {calendar_season(sport)}）。"
+            " 付費後可在 Secrets 設定 API_SPORTS_SEASON_MAX。"
+        )
 
     if st.sidebar.button("同步 API-Sports + 運彩賠率"):
         if not api_key_configured():
