@@ -236,24 +236,22 @@ class ApiSportsIngestionAdapter(DataIngestionProvider):
         self,
         db: SportsDatabase | None = None,
         client: Any | None = None,
-        fallback: MockDataProvider | None = None,
     ):
         from sportsbet.data.api_sports import ApiSportsClient, infer_season
 
         self.db = db or SportsDatabase()
         self.client = client or ApiSportsClient()
         self._infer_season = infer_season
-        self._fallback = fallback or MockDataProvider(self.db)
 
     def fetch_daily_schedule(self, sport: SportLit, match_date: str | None = None) -> pd.DataFrame:
         d = match_date or date.today().isoformat()
         if not self.client.is_configured:
-            return self._fallback.fetch_daily_schedule(sport, d)
+            raise RuntimeError("API_SPORTS_KEY 未設定，API-only 模式下不可抓取賽程。")
         return self.client.sync_daily_to_database(self.db, sport, d)
 
     def fetch_historical_stats(self, sport: SportLit, season: str | int | None = None) -> pd.DataFrame:
         if not self.client.is_configured:
-            return self._fallback.fetch_historical_stats(sport, season)
+            raise RuntimeError("API_SPORTS_KEY 未設定，API-only 模式下不可抓取歷史統計。")
         season_int = int(season) if season else self._infer_season(sport)
         self.client.sync_team_logos(self.db, sport, season_int)
         stats = self.client.sync_to_database(self.db, sport, season_int)
@@ -266,8 +264,8 @@ class ApiSportsIngestionAdapter(DataIngestionProvider):
         rows = self._fetch_sportslottery_odds(sport, d)
         if not rows.empty:
             return rows
-        logger.info("運彩 Blob 無賠率，改用 MOCK 賠率")
-        return self._fallback.fetch_odds(sport, d)
+        logger.warning("運彩 Blob 無賠率，API-only 模式不再使用 MOCK 補值")
+        return pd.DataFrame()
 
     def _fetch_sportslottery_odds(self, sport: SportLit, match_date: str) -> pd.DataFrame:
         from sportsbet.data.sportslottery import SportLotteryClient

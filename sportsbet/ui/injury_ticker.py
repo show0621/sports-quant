@@ -34,7 +34,7 @@ def render_injury_ticker(db: SportsDatabase, sport: str) -> None:
     inj = db.get_injuries(sport)
     if inj.empty:
         if api_key_configured():
-            st.caption("即時傷兵名單尚未接入（API-Sports 僅提供賽程／賽果）。可於側欄載入示範傷兵。")
+            st.caption("尚未取得 ESPN 即時傷兵資料。")
         return
 
     major = inj[inj["status"].isin(["Out", "Doubtful", "Questionable"])]
@@ -48,7 +48,6 @@ def render_injury_ticker(db: SportsDatabase, sport: str) -> None:
         return
 
     major = _dedupe_injuries(major)
-    is_mock = (major.get("source") == "mock").all() if "source" in major.columns else True
 
     lines = []
     for _, row in major.head(12).iterrows():
@@ -58,16 +57,8 @@ def render_injury_ticker(db: SportsDatabase, sport: str) -> None:
         lines.append(f"⚠️ [{team}] {row['player_name']} — {row['status']}{suffix}")
 
     ticker = "　｜　".join(lines)
-    mock_note = (
-        '<div style="font-size:0.75rem;color:#aaa;margin-bottom:4px;">'
-        "示範傷兵資料（MOCK）· 非真實球員"
-        "</div>"
-        if is_mock
-        else ""
-    )
     st.markdown(
         f"""
-        {mock_note}
         <div style="
             background: linear-gradient(90deg, #3d1a1a 0%, #1a1a2e 100%);
             color: #ffcccc;

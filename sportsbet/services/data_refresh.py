@@ -2,14 +2,11 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, timedelta
 from typing import Literal
 
 import pandas as pd
-
-from sportsbet import config
 from sportsbet.data.database import SportsDatabase
-from sportsbet.data.provider import api_key_configured, get_data_provider
+from sportsbet.data.provider import api_key_configured
 from sportsbet.risk.ev import RiskManager
 from sportsbet.services.prediction_service import PredictionService
 
@@ -129,16 +126,8 @@ def run_full_backtest_refresh(
     review = svc.run_backtest_reconcile(sport)
     out["forecasts"] = len(review)
 
-    # 若仍無覆盤且無 API，嘗試 MOCK 歷史
     if review.empty and not api_key_configured():
-        from sportsbet.data.ingestion import MockDataProvider
-
-        mock = MockDataProvider(db)
-        if db.get_backtest_frame(sport).empty:
-            mock.seed_historical_backtest(sport, days=min(config.BACKTEST_DAYS, 365))
-        review = svc.run_backtest_reconcile(sport)
-        out["forecasts"] = len(review)
-        out["mock_seeded"] = 1
+        raise RuntimeError("API-only 模式下未設定 API_SPORTS_KEY，無法建立覆盤資料。")
 
     out["predictions"] = rebuild_predictions_from_forecasts(db, sport)
     svc.run_upcoming(sport, days_ahead=days_lineup)

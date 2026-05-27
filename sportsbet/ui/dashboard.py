@@ -21,7 +21,6 @@ if str(ROOT) not in sys.path:
 from sportsbet import config  # noqa: E402
 from sportsbet.data.database import SportsDatabase  # noqa: E402
 from sportsbet.data.player_ingestion import sync_v2_player_data  # noqa: E402
-from sportsbet.data.ingestion import MockDataProvider  # noqa: E402
 from sportsbet.data.provider import api_key_configured, get_data_provider  # noqa: E402
 from sportsbet.evaluation.evaluator import EvaluationModule  # noqa: E402
 from sportsbet.models.analytics_engine import AnalyticsEngine  # noqa: E402
@@ -61,14 +60,13 @@ def _persist_database(message: str | None = None) -> None:
         st.sidebar.caption(f"GitHub 資料庫同步略過：{exc}")
 
 
-def ensure_data(sport: str, *, seed_history: bool, use_mock_only: bool = False) -> None:
+def ensure_data(sport: str) -> None:
     db = get_db()
-    provider = MockDataProvider(db) if use_mock_only else get_data_provider(db)
+    provider = get_data_provider(db)
     season = None
-    if api_key_configured() and not use_mock_only:
-        from sportsbet.data.api_sports import infer_season
+    from sportsbet.data.api_sports import infer_season
 
-        season = infer_season(sport)  # type: ignore[arg-type]
+    season = infer_season(sport)  # type: ignore[arg-type]
 
     if db.get_team_stats(sport).empty:
         provider.fetch_historical_stats(sport, season)
@@ -89,13 +87,9 @@ def ensure_data(sport: str, *, seed_history: bool, use_mock_only: bool = False) 
         # odds 可能會在「有賽程但尚未抓到」的狀況出現缺口；這裡確保補齊
         if db.count_odds_for_date(sport, d) == 0:
             provider.fetch_odds(sport, d)
-    if seed_history and db.get_backtest_frame(sport).empty and (use_mock_only or not api_key_configured()):
-        provider.seed_historical_backtest(sport, days=60)
-
     svc = get_prediction_service()
     inj_df = db.get_injuries(sport)
-    # 若資料庫尚無傷兵，或目前全是 MOCK（先前載入過示範），改用 ESPN 更新
-    if inj_df.empty or ("source" in inj_df.columns and not inj_df.empty and (inj_df["source"] == "mock").all()):
+    if inj_df.empty:
         sync_v2_player_data(db, sport)
 
     # 必須在傷兵資料就緒後再跑 upcoming，讓 forecast 反映 injury_penalty
@@ -105,7 +99,7 @@ def ensure_data(sport: str, *, seed_history: bool, use_mock_only: bool = False) 
         run_full_backtest_refresh(
             db,
             sport,
-            sync_api=api_key_configured() and not use_mock_only,
+            sync_api=True,
             sync_injuries=False,
         )
     else:
@@ -299,7 +293,7 @@ def page_daily_picks(sport: str) -> None:
     st.caption("僅顯示 EV > 0 的場次 · 四分之一凱利建議倉位")
     df = build_daily_predictions(sport)
     if df.empty:
-        st.warning("尚無今日賽程或球隊統計，請按側欄「重新載入 MOCK 資料」。")
+        st.warning("尚無今日賽程或球隊統計，請先在側欄同步 API 資料。")
         return
     positive = df[df["正EV"] == True].copy()  # noqa: E712
     st.metric("今日正 EV 場次", len(positive))
@@ -326,7 +320,7 @@ def page_model_health(sport: str) -> None:
     db = get_db()
     df = db.get_backtest_frame(sport)
     if df.empty:
-        st.warning("尚無歷史預測與賽果，請先載入 MOCK 歷史資料。")
+        st.warning("尚無歷史預測與賽果，請先同步 API 歷史資料。")
         return
 
     evaluator = EvaluationModule()
@@ -427,16 +421,10 @@ def main() -> None:
     st.sidebar.title("運彩量化看板")
     sport = st.sidebar.selectbox("運動", ["nba", "mlb"])
 
-    if api_key_configured():
-        st.sidebar.success("API-Sports 已設定")
-    else:
-        st.sidebar.warning("未設定 API_SPORTS_KEY（使用 MOCK）")
-
-    seed = st.sidebar.checkbox(
-        "載入 MOCK 歷史（僅無 API 時）",
-        value=not api_key_configured(),
-        disabled=api_key_configured(),
-    )
+    if not api_key_configured():
+        st.sidebar.error("未設定 API_SPORTS_KEY。系統已停用 MOCK，請先設定真實 API 金鑰。")
+        st.stop()
+    st.sidebar.success("API-Sports 已設定（API-only 模式）")
 
     if st.sidebar.button("同步 API-Sports + 運彩賠率"):
         if not api_key_configured():
@@ -466,41 +454,7 @@ def main() -> None:
             st.cache_resource.clear()
             st.rerun()
 
-    if st.sidebar.button("重新載入 MOCK 資料"):
-        db = get_db()
-        provider = MockDataProvider(db)
-        provider.fetch_historical_stats(sport)
-        from datetime import timedelta as _td
-
-        for _off in range(7):
-            _d = (date.today() + _td(days=_off)).isoformat()
-            provider.fetch_daily_schedule(sport, _d)
-        provider.fetch_odds(sport)
-        if seed or not api_key_configured():
-            provider.seed_historical_backtest(sport, days=60)
-        sync_v2_player_data(db, sport)
-        run_full_backtest_refresh(db, sport, sync_api=False, sync_injuries=False)
-        _persist_database(f"chore(data): mock reload {sport}")
-        st.sidebar.success("MOCK 資料已更新")
-        st.cache_resource.clear()
-        st.rerun()
-
-    with st.sidebar.expander("傷兵示範 (MOCK)", expanded=False):
-        if api_key_configured():
-            st.caption("已啟用即時傷兵（ESPN）。MOCK 示範僅供未設定 API-Sports 時使用。")
-        else:
-            st.caption("目前使用 MOCK 示範傷兵（介面展示）。")
-            db_inj = get_db()
-            if st.button("載入示範傷兵", key="load_mock_inj"):
-                sync_v2_player_data(db_inj, sport)
-                st.success("已載入示範傷兵")
-                st.rerun()
-            if st.button("清除示範傷兵", key="clear_mock_inj"):
-                n = db_inj.clear_injuries(sport, source="mock")
-                st.success(f"已清除 {n} 筆")
-                st.rerun()
-
-    ensure_data(sport, seed_history=seed)
+    ensure_data(sport)
 
     render_injury_ticker(get_db(), sport)
 

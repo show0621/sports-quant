@@ -4,7 +4,7 @@
 
 from sportsbet.data.api_sports import ApiSportsClient
 from sportsbet.data.database import SportsDatabase
-from sportsbet.data.ingestion import ApiSportsIngestionAdapter, DataIngestionProvider, MockDataProvider
+from sportsbet.data.ingestion import ApiSportsIngestionAdapter, DataIngestionProvider
 from sportsbet.data.provider import api_key_configured, get_data_provider
 from sportsbet.data.jbot import JBotClient
 
@@ -37,7 +37,6 @@ __all__ = [
     "ApiSportsClient",
     "SportsDatabase",
     "DataIngestionProvider",
-    "MockDataProvider",
     "ApiSportsIngestionAdapter",
     "get_data_provider",
     "api_key_configured",
