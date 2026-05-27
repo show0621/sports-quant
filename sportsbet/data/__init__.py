@@ -18,6 +18,7 @@ _SYMBOL_MAP = {
     "SportLotteryClient": "sportsbet.data.sportslottery",
     "STANDARD_ODDS_COLUMNS": "sportsbet.data.sportslottery",
     "WandaScraper": "sportsbet.data.wanda_scraper",
+    "PlaySportScraper": "sportsbet.data.playsport_scraper",
     "build_backtest_dataset": "sportsbet.data.timeline",
     "merge_timeline": "sportsbet.data.timeline",
     "load_games": "sportsbet.data.storage",

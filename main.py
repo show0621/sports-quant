@@ -110,6 +110,19 @@ def cmd_refresh_backtest(args: argparse.Namespace) -> None:
         push_database_to_github(message=f"chore(data): refresh backtest {args.sport}")
 
 
+def cmd_scrape_playsport(args: argparse.Namespace) -> None:
+    from sportsbet.data.database import SportsDatabase
+    from sportsbet.data.playsport_scraper import PlaySportScraper
+
+    db = SportsDatabase()
+    scraper = PlaySportScraper()
+    if args.team_id:
+        df = scraper.sync_team_to_database(db, args.team_id, args.sport)
+    else:
+        df = scraper.sync_sport(db, args.sport, max_teams=args.max_teams)
+    logger.info("玩運彩同步 %d 筆", len(df))
+
+
 def cmd_push_db(args: argparse.Namespace) -> None:
     from sportsbet.data.db_github_sync import push_database_to_github
 
@@ -173,6 +186,12 @@ def main() -> None:
     p_refresh.add_argument("--no-api", action="store_true", help="不呼叫 API-Sports")
     p_refresh.add_argument("--push", action="store_true", help="完成後推送 DB 至 GitHub")
     p_refresh.set_defaults(func=cmd_refresh_backtest)
+
+    p_ps = sub.add_parser("scrape-playsport", help="抓取玩運彩球隊歷史賽事")
+    p_ps.add_argument("--sport", choices=["nba", "mlb"], default="nba")
+    p_ps.add_argument("--team-id", type=int, default=0, help="單隊 teamid（如雷霆=53）")
+    p_ps.add_argument("--max-teams", type=int, default=30)
+    p_ps.set_defaults(func=cmd_scrape_playsport)
 
     p_push = sub.add_parser("push-db", help="推送 data/sportsbet.db 至 GitHub")
     p_push.set_defaults(func=cmd_push_db)

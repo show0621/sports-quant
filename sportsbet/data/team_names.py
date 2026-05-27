@@ -35,6 +35,7 @@ NBA_ZH_TO_EN: dict[str, str] = {
     "多倫多暴龍": "Toronto Raptors",
     "猶他爵士": "Utah Jazz",
     "華盛頓巫師": "Washington Wizards",
+    "奧克拉荷馬雷霆": "Oklahoma City Thunder",
     # 簡稱 / 別名
     "老鷹": "Atlanta Hawks",
     "塞爾提克": "Boston Celtics",
@@ -65,6 +66,7 @@ NBA_ZH_TO_EN: dict[str, str] = {
     "暴龍": "Toronto Raptors",
     "爵士": "Utah Jazz",
     "巫師": "Washington Wizards",
+    "雷霆": "Oklahoma City Thunder",
 }
 
 # MLB：運彩常見中文全名 → API-Sports 英文隊名

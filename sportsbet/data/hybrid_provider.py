@@ -102,13 +102,17 @@ class HybridIngestionProvider(SportLotteryOddsMixin, DataIngestionProvider):
             try:
                 stats = self._nba.fetch_historical_stats(sport, season)
                 if not stats.empty:
+                    _sync_playsport_history(self.db, sport)
                     return stats
             except Exception as exc:
                 logger.warning("nba_api 歷史同步失敗：%s", exc)
         df = self._try_api("fetch_historical_stats", sport, season)
         if df is not None and not df.empty:
+            _sync_playsport_history(self.db, sport)
             return df
-        return self._espn.fetch_historical_stats(sport, season)
+        stats = self._espn.fetch_historical_stats(sport, season)
+        _sync_playsport_history(self.db, sport)
+        return stats
 
     def sync_recent_schedule(self, sport: SportLit, days_ahead: int = 7) -> None:
         """同步今日起算多日賽程（混合來源）。"""
@@ -127,4 +131,20 @@ def data_source_description(sport: SportLit) -> str:
     parts.append("傷兵=ESPN")
     if config.resolve_api_sports_key():
         parts.append("API-Sports=備援")
+    if config.PLAYSPORT_ENABLED:
+        parts.append("歷史=玩運彩")
     return " · ".join(parts)
+
+
+def _sync_playsport_history(db: SportsDatabase, sport: SportLit) -> int:
+    if not config.PLAYSPORT_ENABLED or sport not in ("nba", "mlb"):
+        return 0
+    from sportsbet.data.playsport_scraper import PlaySportScraper
+
+    scraper = PlaySportScraper()
+    df = scraper.sync_sport(
+        db,
+        sport,  # type: ignore[arg-type]
+        max_teams=config.PLAYSPORT_MAX_TEAMS_PER_SYNC,
+    )
+    return len(df)

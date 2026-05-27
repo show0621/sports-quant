@@ -31,6 +31,11 @@ API_SPORTS_SEASON_MAX = int(os.getenv("API_SPORTS_SEASON_MAX", "2024"))
 # hybrid（預設）| api_sports
 DATA_SOURCE = os.getenv("DATA_SOURCE", "hybrid").strip().lower()
 
+# 玩運彩 playsport.cc 歷史賽事（賽果 + 台灣運彩盤）
+PLAYSPORT_ENABLED = os.getenv("PLAYSPORT_ENABLED", "true").lower() == "true"
+PLAYSPORT_REQUEST_DELAY_SEC = float(os.getenv("PLAYSPORT_REQUEST_DELAY_SEC", "1.2"))
+PLAYSPORT_MAX_TEAMS_PER_SYNC = int(os.getenv("PLAYSPORT_MAX_TEAMS_PER_SYNC", "30"))
+
 
 def resolve_api_sports_key() -> str:
     """從 .env 或 Streamlit Secrets 讀取 API-Sports 金鑰。"""
