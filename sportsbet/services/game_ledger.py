@@ -116,6 +116,11 @@ class GameLedgerService:
     def __init__(self, db: SportsDatabase | None = None):
         self.db = db or SportsDatabase()
 
+    def _ledger_start(self) -> str:
+        from sportsbet.services.sync_accumulation import ensure_ledger_start_date
+
+        return ensure_ledger_start_date(self.db)
+
     def _build_pre_snapshot(self, game: pd.Series) -> dict[str, Any]:
         gid = int(game["id"])
         sport = str(game["sport"])
@@ -185,17 +190,15 @@ class GameLedgerService:
             "bet_results": _build_bet_results(predictions, odds, home_score, away_score),
         }
 
-    def sync_sport(self, sport: Sport) -> dict[str, int]:
+    def capture_pre_only(self, sport: Sport) -> int:
+        """僅寫入尚未有賽前快照的場次（每場保留第一次）。"""
         if not config.GAME_LEDGER_ENABLED:
-            return {"pre": 0, "post": 0}
-        start = config.GAME_LEDGER_START_DATE
-        pre_n = post_n = 0
-
+            return 0
+        start = self._ledger_start()
+        pre_n = 0
         pre_games = self.db.get_games_for_ledger_pre(sport, start_date=start)
         for _, g in pre_games.iterrows():
             snap = self._build_pre_snapshot(g)
-            if not snap["odds"] and not snap["predictions"] and snap["forecast"] is None:
-                continue
             self.db.upsert_game_ledger_pre(
                 int(g["id"]),
                 sport,
@@ -205,7 +208,14 @@ class GameLedgerService:
                 json.dumps(snap, ensure_ascii=False, default=str),
             )
             pre_n += 1
+        return pre_n
 
+    def capture_post_only(self, sport: Sport, *, start_date: str | None = None) -> int:
+        """寫入新完賽場次的賽後快照。"""
+        if not config.GAME_LEDGER_ENABLED:
+            return 0
+        start = start_date or self._ledger_start()
+        post_n = 0
         post_games = self.db.get_games_for_ledger_post(sport, start_date=start)
         for _, g in post_games.iterrows():
             snap = self._build_post_snapshot(g)
@@ -218,7 +228,13 @@ class GameLedgerService:
                 json.dumps(snap, ensure_ascii=False, default=str),
             )
             post_n += 1
+        return post_n
 
+    def sync_sport(self, sport: Sport) -> dict[str, int]:
+        if not config.GAME_LEDGER_ENABLED:
+            return {"pre": 0, "post": 0}
+        pre_n = self.capture_pre_only(sport)
+        post_n = self.capture_post_only(sport)
         logger.info("game ledger sport=%s pre=%d post=%d", sport, pre_n, post_n)
         return {"pre": pre_n, "post": post_n}
 

@@ -1092,6 +1092,8 @@ class SportsDatabase:
                 conn,
                 params=(sport, today),
             )
+
+    def clamp_prediction_probs(self) -> int:
         """修正浮點誤差導致 model_prob 略大於 1 的紀錄。"""
         with self.connection() as conn:
             cur = conn.execute(
@@ -1399,7 +1401,7 @@ class SportsDatabase:
         *,
         start_date: str,
     ) -> pd.DataFrame:
-        """尚未結束、需更新賽前快照的賽事。"""
+        """尚未結束、且尚未寫入賽前快照的賽事。"""
         finished = ("final", "FT", "AOT", "Finished", "POST")
         placeholders = ",".join("?" for _ in finished)
         with self.connection() as conn:
@@ -1407,9 +1409,11 @@ class SportsDatabase:
                 f"""
                 SELECT g.*
                 FROM games g
+                LEFT JOIN game_ledger l ON l.game_id = g.id
                 WHERE g.sport = ?
                   AND g.match_date >= ?
                   AND (g.status IS NULL OR g.status NOT IN ({placeholders}))
+                  AND l.pre_captured_at IS NULL
                 ORDER BY g.match_date, g.id
                 """,
                 conn,
@@ -1517,8 +1521,12 @@ class SportsDatabase:
                      pre_captured_at, pre_snapshot_json)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(game_id) DO UPDATE SET
-                    pre_captured_at = excluded.pre_captured_at,
-                    pre_snapshot_json = excluded.pre_snapshot_json
+                    sport = excluded.sport,
+                    match_date = excluded.match_date,
+                    home_team = excluded.home_team,
+                    away_team = excluded.away_team,
+                    pre_captured_at = COALESCE(game_ledger.pre_captured_at, excluded.pre_captured_at),
+                    pre_snapshot_json = COALESCE(game_ledger.pre_snapshot_json, excluded.pre_snapshot_json)
                 """,
                 (game_id, sport, match_date, home_team, away_team, now, snapshot_json),
             )

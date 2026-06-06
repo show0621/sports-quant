@@ -46,9 +46,9 @@ LIVE_SYNC_INTERVAL_SEC = int(os.getenv("LIVE_SYNC_INTERVAL_SEC", "180"))  # watc
 DASHBOARD_AUTOREFRESH_SEC = int(os.getenv("DASHBOARD_AUTOREFRESH_SEC", "120"))  # 看板每 2 分鐘刷新
 LIVE_SYNC_DAYS_AHEAD = int(os.getenv("LIVE_SYNC_DAYS_AHEAD", "3"))  # live 只抓近 3 天
 
-# --- 賽事帳本（從指定日起累積每場賽前/賽後快照）---
+# --- 賽事帳本（從指定日起累積每場賽前/賽後快照；起始日首次同步後寫入 DB 不再變更）---
 GAME_LEDGER_ENABLED = os.getenv("GAME_LEDGER_ENABLED", "true").lower() == "true"
-GAME_LEDGER_START_DATE = os.getenv("GAME_LEDGER_START_DATE", date.today().isoformat())
+GAME_LEDGER_START_DATE = os.getenv("GAME_LEDGER_START_DATE", "")  # 空值=首次同步當天，見 sync_accumulation
 
 
 def resolve_api_sports_key() -> str:
@@ -148,6 +148,8 @@ INJURY_DISCOUNT = {"Questionable": 0.5, "Probable": 0.85}
 
 # --- GitHub 資料庫持久化 ---
 GITHUB_DB_SYNC_ENABLED = os.getenv("GITHUB_DB_SYNC_ENABLED", "true").lower() == "true"
+GITHUB_AUTO_PUSH = os.getenv("GITHUB_AUTO_PUSH", "true").lower() == "true"
+WATCH_PUSH_GITHUB = os.getenv("WATCH_PUSH_GITHUB", "true").lower() == "true"
 GITHUB_REPO_REMOTE = os.getenv("GITHUB_REPO_REMOTE", "https://github.com/show0621/sports-quant.git")
 
 # --- 威剛爬蟲（舊 HTML；現以運彩 Blob + JBot 為主） ---

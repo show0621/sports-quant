@@ -1,4 +1,4 @@
-"""看板主題與共用樣式。"""
+"""看板主題：輕白、玩運彩 / Bing Sports 風格，韻彩分析師版面。"""
 from __future__ import annotations
 
 import streamlit as st
@@ -8,122 +8,273 @@ def inject_dashboard_theme() -> None:
     st.markdown(
         """
         <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700&family=Noto+Serif+TC:wght@500;600&display=swap');
+
         :root {
-            --sq-bg: #0b1220;
-            --sq-card: #121c2e;
-            --sq-accent: #3b82f6;
-            --sq-accent2: #10b981;
-            --sq-warn: #f59e0b;
-            --sq-text: #e5e7eb;
-            --sq-muted: #94a3b8;
+            --sq-bg: #f4f6f9;
+            --sq-surface: #ffffff;
+            --sq-border: #e2e8f0;
+            --sq-border-light: #eef2f6;
+            --sq-ink: #1e293b;
+            --sq-muted: #64748b;
+            --sq-brand: #007a54;
+            --sq-brand-soft: #e8f5ef;
+            --sq-accent: #2563eb;
+            --sq-live: #dc2626;
+            --sq-warn: #d97706;
+            --sq-shadow: 0 1px 3px rgba(15,23,42,0.06), 0 4px 14px rgba(15,23,42,0.04);
         }
+
         .stApp {
-            background: linear-gradient(165deg, #070b14 0%, #0f172a 45%, #111827 100%);
+            background: var(--sq-bg);
+            font-family: "Noto Sans TC", "Segoe UI", sans-serif;
+            color: var(--sq-ink);
         }
         [data-testid="stSidebar"] {
-            background: linear-gradient(180deg, #0f172a 0%, #1e293b 100%);
-            border-right: 1px solid rgba(148,163,184,0.15);
+            background: var(--sq-surface);
+            border-right: 1px solid var(--sq-border);
         }
-        .sq-hero {
-            background: linear-gradient(135deg, rgba(59,130,246,0.18), rgba(16,185,129,0.12));
-            border: 1px solid rgba(148,163,184,0.2);
+        [data-testid="stSidebar"] .stMarkdown { color: var(--sq-ink); }
+
+        /* 頂部品牌 */
+        .sq-masthead {
+            background: linear-gradient(135deg, #ffffff 0%, #f0faf5 55%, #f8fbff 100%);
+            border: 1px solid var(--sq-border);
             border-radius: 16px;
-            padding: 1.1rem 1.4rem;
+            padding: 1.25rem 1.5rem 1.1rem;
             margin-bottom: 1rem;
+            box-shadow: var(--sq-shadow);
+        }
+        .sq-masthead-brand {
+            font-family: "Noto Serif TC", "Noto Sans TC", serif;
+            font-size: 1.45rem;
+            font-weight: 600;
+            color: var(--sq-ink);
+            letter-spacing: 0.06em;
+        }
+        .sq-masthead-brand span { color: var(--sq-brand); }
+        .sq-masthead-sub {
+            margin-top: 0.35rem;
+            color: var(--sq-muted);
+            font-size: 0.88rem;
+            letter-spacing: 0.02em;
+            line-height: 1.5;
+        }
+
+        /* 區塊標題 */
+        .sq-hero {
+            background: var(--sq-surface);
+            border: 1px solid var(--sq-border);
+            border-left: 4px solid var(--sq-brand);
+            border-radius: 12px;
+            padding: 1rem 1.25rem;
+            margin-bottom: 0.85rem;
+            box-shadow: var(--sq-shadow);
         }
         .sq-hero h1 {
-            font-size: 1.55rem;
-            margin: 0 0 0.35rem 0;
-            color: #f8fafc;
-            letter-spacing: 0.02em;
+            font-family: "Noto Serif TC", serif;
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin: 0 0 0.3rem 0;
+            color: var(--sq-ink);
+            letter-spacing: 0.03em;
         }
         .sq-hero p {
             margin: 0;
             color: var(--sq-muted);
-            font-size: 0.92rem;
+            font-size: 0.85rem;
         }
+
+        /* 賽事卡片 */
         .sq-live-card {
-            background: var(--sq-card);
-            border: 1px solid rgba(148,163,184,0.18);
+            background: var(--sq-surface);
+            border: 1px solid var(--sq-border);
             border-radius: 14px;
-            padding: 0.85rem 1rem;
-            margin-bottom: 0.65rem;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+            padding: 1rem 1.15rem;
+            margin-bottom: 0.75rem;
+            box-shadow: var(--sq-shadow);
+            transition: box-shadow 0.15s ease;
+        }
+        .sq-live-card:hover {
+            box-shadow: 0 2px 8px rgba(15,23,42,0.08), 0 8px 24px rgba(15,23,42,0.06);
         }
         .sq-live-card.live {
-            border-color: rgba(16,185,129,0.45);
-            box-shadow: 0 0 0 1px rgba(16,185,129,0.15), 0 8px 24px rgba(0,0,0,0.25);
+            border-color: #fecaca;
+            background: linear-gradient(180deg, #fffafa 0%, #ffffff 100%);
+            box-shadow: 0 0 0 1px rgba(220,38,38,0.12), var(--sq-shadow);
         }
+
+        /* 標籤 */
         .sq-badge {
             display: inline-block;
-            padding: 0.15rem 0.55rem;
+            padding: 0.12rem 0.5rem;
             border-radius: 999px;
-            font-size: 0.72rem;
+            font-size: 0.68rem;
             font-weight: 600;
-            margin-right: 0.35rem;
-            letter-spacing: 0.03em;
-        }
-        .sq-badge-post { background: rgba(245,158,11,0.2); color: #fcd34d; }
-        .sq-badge-finals { background: rgba(239,68,68,0.22); color: #fca5a5; }
-        .sq-badge-reg { background: rgba(59,130,246,0.18); color: #93c5fd; }
-        .sq-badge-live { background: rgba(16,185,129,0.22); color: #6ee7b7; animation: sq-pulse 1.6s ease-in-out infinite; }
-        .sq-score {
-            font-size: 1.65rem;
-            font-weight: 700;
-            color: #f8fafc;
+            margin: 0 0.2rem 0.25rem 0;
             letter-spacing: 0.04em;
         }
-        .sq-team { font-size: 0.95rem; color: #e2e8f0; font-weight: 600; }
-        .sq-clock { color: #94a3b8; font-size: 0.82rem; }
+        .sq-badge-live {
+            background: #fee2e2;
+            color: #b91c1c;
+            animation: sq-pulse 1.8s ease-in-out infinite;
+        }
+        .sq-badge-post { background: #fef3c7; color: #b45309; }
+        .sq-badge-finals { background: #fce7f3; color: #be185d; }
+        .sq-badge-reg { background: #dbeafe; color: #1d4ed8; }
+
+        .sq-score {
+            font-size: 1.75rem;
+            font-weight: 700;
+            color: var(--sq-ink);
+            letter-spacing: 0.06em;
+            line-height: 1.2;
+        }
+        .sq-clock { color: var(--sq-muted); font-size: 0.8rem; margin-top: 0.15rem; }
+
+        /* 隊名 */
         .sq-team-inline {
             display: flex;
             align-items: center;
             gap: 0.55rem;
         }
-        .sq-team-block .sq-team-inline {
-            justify-content: flex-start;
-        }
-        div[style*="text-align:right"] .sq-team-inline {
-            flex-direction: row-reverse;
-        }
-        div[style*="text-align:right"] .sq-team-text {
-            text-align: right;
-        }
+        .sq-team-block .sq-team-inline { justify-content: flex-start; }
+        div[style*="text-align:right"] .sq-team-inline { flex-direction: row-reverse; }
+        div[style*="text-align:right"] .sq-team-text { text-align: right; }
         .sq-team-logo {
-            border-radius: 6px;
-            background: rgba(255,255,255,0.06);
+            border-radius: 8px;
+            background: #f8fafc;
+            border: 1px solid var(--sq-border-light);
             flex-shrink: 0;
         }
         .sq-team-en {
-            font-size: 0.92rem;
+            font-size: 0.9rem;
             font-weight: 700;
-            color: #f1f5f9;
+            color: var(--sq-ink);
             line-height: 1.25;
         }
         .sq-team-zh {
-            font-size: 0.78rem;
-            color: #94a3b8;
-            margin-top: 0.1rem;
-            line-height: 1.2;
+            font-size: 0.76rem;
+            color: var(--sq-muted);
+            margin-top: 0.08rem;
         }
-        .sq-odds-box {
-            background: rgba(18,28,46,0.85);
-            border: 1px solid rgba(148,163,184,0.15);
+
+        /* 盤口面板 */
+        .sq-odds-panel {
+            background: #f8fafc;
+            border: 1px solid var(--sq-border);
             border-radius: 12px;
-            padding: 0.65rem 0.85rem;
-            margin-bottom: 0.5rem;
+            padding: 0.85rem 1rem;
+            margin: 0.5rem 0 0.75rem;
         }
+        .sq-odds-panel h4 {
+            margin: 0 0 0.65rem 0;
+            font-size: 0.82rem;
+            font-weight: 600;
+            color: var(--sq-muted);
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+        .sq-odds-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 0.65rem;
+        }
+        @media (max-width: 768px) {
+            .sq-odds-grid { grid-template-columns: 1fr; }
+        }
+        .sq-odds-col {
+            background: var(--sq-surface);
+            border: 1px solid var(--sq-border-light);
+            border-radius: 10px;
+            padding: 0.65rem 0.75rem;
+        }
+        .sq-odds-col-title {
+            font-size: 0.78rem;
+            font-weight: 700;
+            color: var(--sq-brand);
+            margin-bottom: 0.35rem;
+        }
+        .sq-odds-line { font-size: 0.88rem; color: var(--sq-ink); line-height: 1.55; }
+        .sq-odds-cap { font-size: 0.75rem; color: var(--sq-muted); margin-top: 0.25rem; }
+
+        /* 傷兵跑馬燈 */
+        .sq-injury-ticker {
+            background: #fffbeb;
+            color: #92400e;
+            padding: 0.55rem 0.9rem;
+            border-radius: 10px;
+            border: 1px solid #fde68a;
+            border-left: 4px solid var(--sq-warn);
+            font-size: 0.84rem;
+            margin-bottom: 0.85rem;
+            overflow-x: auto;
+            white-space: nowrap;
+        }
+
+        /* 分頁 */
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 0.35rem;
+            background: transparent;
+            border-bottom: 1px solid var(--sq-border);
+            padding-bottom: 0.25rem;
+        }
+        .stTabs [data-baseweb="tab"] {
+            background: transparent;
+            border-radius: 8px 8px 0 0;
+            color: var(--sq-muted);
+            font-weight: 500;
+            padding: 0.45rem 0.85rem;
+        }
+        .stTabs [aria-selected="true"] {
+            background: var(--sq-surface) !important;
+            color: var(--sq-brand) !important;
+            border: 1px solid var(--sq-border);
+            border-bottom-color: var(--sq-surface) !important;
+            font-weight: 600;
+        }
+
+        /* 指標卡 */
+        div[data-testid="stMetric"] {
+            background: var(--sq-surface);
+            border: 1px solid var(--sq-border);
+            border-radius: 12px;
+            padding: 0.55rem 0.8rem;
+            box-shadow: var(--sq-shadow);
+        }
+        div[data-testid="stMetric"] label {
+            color: var(--sq-muted) !important;
+            font-size: 0.78rem !important;
+        }
+        div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+            color: var(--sq-ink) !important;
+        }
+
+        h1, h2, h3 { color: var(--sq-ink) !important; font-weight: 600 !important; }
+        .stCaption { color: var(--sq-muted) !important; }
+
         @keyframes sq-pulse {
             0%, 100% { opacity: 1; }
-            50% { opacity: 0.65; }
-        }
-        div[data-testid="stMetric"] {
-            background: rgba(18,28,46,0.75);
-            border: 1px solid rgba(148,163,184,0.12);
-            border-radius: 12px;
-            padding: 0.5rem 0.75rem;
+            50% { opacity: 0.72; }
         }
         </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_masthead(sport: str) -> None:
+    """韻彩分析師品牌列。"""
+    label = "NBA 籃球" if sport == "nba" else "MLB 棒球"
+    st.markdown(
+        f"""
+        <div class="sq-masthead">
+            <div class="sq-masthead-brand"><span>韻彩</span> · 賽事量化分析</div>
+            <div class="sq-masthead-sub">
+                {label} · 即時賽況 · 台灣運彩盤口 · 模型勝率與大小分推演
+                · 以數據閱讀比賽，從容下注
+            </div>
+        </div>
         """,
         unsafe_allow_html=True,
     )

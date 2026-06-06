@@ -85,39 +85,65 @@ def render_odds_panel(
     total_label = "大小分" if sport == "nba" else "大小分（總得分）"
     spread_label = "讓分（勝分差）"
 
-    st.markdown("#### 盤口資訊")
-    c1, c2, c3 = st.columns(3)
+    ml_body = (
+        f"<div class='sq-odds-line'>主隊 <strong>{_fmt_odds(odds['ml_home'])}</strong></div>"
+        f"<div class='sq-odds-line'>客隊 <strong>{_fmt_odds(odds['ml_away'])}</strong></div>"
+    )
+    if odds["ml_home"] is None and odds["ml_away"] is None:
+        ml_body += "<div class='sq-odds-cap'>尚無勝負賠率</div>"
 
-    with c1:
-        st.markdown("**勝負（不讓分）**")
-        st.markdown(f"主隊 **{_fmt_odds(odds['ml_home'])}**")
-        st.markdown(f"客隊 **{_fmt_odds(odds['ml_away'])}**")
-        if odds["ml_home"] is None and odds["ml_away"] is None:
-            st.caption("尚無勝負賠率")
+    sp_parts = []
+    if odds["spread_home_line"] is not None:
+        sp_parts.append(
+            f"主 {odds['spread_home_line']:+.1f} · {_fmt_odds(odds['spread_home_odds'])}"
+        )
+    if odds["spread_away_line"] is not None:
+        sp_parts.append(
+            f"客 {odds['spread_away_line']:+.1f} · {_fmt_odds(odds['spread_away_odds'])}"
+        )
+    sp_body = "".join(f"<div class='sq-odds-line'>{p}</div>" for p in sp_parts)
+    if not sp_parts:
+        sp_body = "<div class='sq-odds-cap'>尚無讓分盤</div>"
+    elif fc.predicted_margin is not None:
+        sp_body += f"<div class='sq-odds-cap'>模型預估分差 {fc.predicted_margin:+.1f}</div>"
 
-    with c2:
-        st.markdown(f"**{spread_label}**")
-        if odds["spread_home_line"] is not None:
-            sign_h = f"{odds['spread_home_line']:+.1f}"
-            st.markdown(f"主隊 {sign_h} · {_fmt_odds(odds['spread_home_odds'])}")
-        if odds["spread_away_line"] is not None:
-            sign_a = f"{odds['spread_away_line']:+.1f}"
-            st.markdown(f"客隊 {sign_a} · {_fmt_odds(odds['spread_away_odds'])}")
-        if odds["spread_home_line"] is None and odds["spread_away_line"] is None:
-            st.caption("尚無讓分盤")
-        elif fc.predicted_margin is not None:
-            st.caption(f"模型預估分差 {fc.predicted_margin:+.1f}")
+    line = odds["total_line"] if odds["total_line"] is not None else fc.total_line
+    if line is not None:
+        under = fc.prob_under if fc.prob_under is not None else (
+            (1.0 - fc.prob_over) if fc.prob_over is not None else None
+        )
+        tot_body = (
+            f"<div class='sq-odds-line'>盤口線 <strong>{float(line):.1f}</strong></div>"
+            f"<div class='sq-odds-line'>大 {_fmt_odds(odds['over_odds'])} · 小 {_fmt_odds(odds['under_odds'])}</div>"
+        )
+        if fc.prob_over is not None and under is not None:
+            tot_body += (
+                f"<div class='sq-odds-cap'>模型 大 {fc.prob_over * 100:.1f}% · 小 {under * 100:.1f}%</div>"
+            )
+    else:
+        tot_body = "<div class='sq-odds-cap'>尚無大小分盤</div>"
+        if fc.predicted_total is not None:
+            tot_body += f"<div class='sq-odds-cap'>模型預估總分 {fc.predicted_total:.1f}</div>"
 
-    with c3:
-        st.markdown(f"**{total_label}**")
-        line = odds["total_line"] if odds["total_line"] is not None else fc.total_line
-        if line is not None:
-            st.markdown(f"盤口線 **{float(line):.1f}**")
-            st.markdown(f"大 {_fmt_odds(odds['over_odds'])}　｜　小 {_fmt_odds(odds['under_odds'])}")
-            if fc.prob_over is not None:
-                under = fc.prob_under if fc.prob_under is not None else (1.0 - fc.prob_over)
-                st.caption(f"模型：大 {fc.prob_over * 100:.1f}% · 小 {under * 100:.1f}%")
-        else:
-            st.caption("尚無大小分盤")
-            if fc.predicted_total is not None:
-                st.caption(f"模型預估總分 {fc.predicted_total:.1f}")
+    st.markdown(
+        f"""
+        <div class="sq-odds-panel">
+            <h4>盤口分析</h4>
+            <div class="sq-odds-grid">
+                <div class="sq-odds-col">
+                    <div class="sq-odds-col-title">勝負（不讓分）</div>
+                    {ml_body}
+                </div>
+                <div class="sq-odds-col">
+                    <div class="sq-odds-col-title">{spread_label}</div>
+                    {sp_body}
+                </div>
+                <div class="sq-odds-col">
+                    <div class="sq-odds-col-title">{total_label}</div>
+                    {tot_body}
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )

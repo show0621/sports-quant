@@ -15,6 +15,11 @@ from sportsbet.services.data_refresh import (
     run_incremental_backtest_refresh,
 )
 from sportsbet.services.prediction_service import PredictionService
+from sportsbet.services.sync_accumulation import (
+    accumulate_after_sync,
+    capture_ledger_pre,
+    ensure_ledger_start_date,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -121,10 +126,12 @@ class DataOrchestrator:
         return out
 
     def sync_daily(self, sport: Sport, *, days_ahead: int = 7, force_players: bool = False) -> dict[str, int]:
-        """每日管線：賽程 + 盤口 + 球員 + 預測。"""
+        """每日管線：賽程 + 盤口 + 球員 + 預測 + 歷史累積。"""
         out: dict[str, int] = {}
         season = calendar_season(sport)
         incremental = self.db.is_backtest_cache_warm(sport)
+
+        ensure_ledger_start_date(self.db)
 
         if self.db.get_team_stats(sport).empty:
             self.provider.fetch_historical_stats(sport, season, incremental=False)
@@ -135,8 +142,12 @@ class DataOrchestrator:
         for offset in range(days_ahead + 1):
             d = (today + timedelta(days=offset)).isoformat()
             self.provider.fetch_daily_schedule(sport, d)
-            if self.db.count_odds_for_date(sport, d) == 0:
-                self.provider.fetch_odds(sport, d)
+
+        out["ledger_pre"] = capture_ledger_pre(self.db, sport)
+
+        for offset in range(days_ahead + 1):
+            d = (today + timedelta(days=offset)).isoformat()
+            self.provider.fetch_odds(sport, d, replace=False)
 
         out["players"] = sum(
             self.sync_players(sport, days_lineup=days_ahead, force=force_players).values()
@@ -145,13 +156,10 @@ class DataOrchestrator:
         svc = PredictionService(self.db)
         forecasts = svc.run_upcoming(sport, days_ahead=days_ahead)
         out["forecasts"] = len(forecasts)
-        self.db.finalize_games_with_scores(sport)
-        if config.GAME_LEDGER_ENABLED:
-            from sportsbet.services.game_ledger import GameLedgerService
 
-            ledger = GameLedgerService(self.db).sync_sport(sport)
-            out["ledger_pre"] = ledger["pre"]
-            out["ledger_post"] = ledger["post"]
+        acc = accumulate_after_sync(self.db, sport)
+        out.update(acc)
+
         self.db.set_backtest_sync_meta(sport, "daily_synced_at", today.isoformat())
         logger.info("daily sync sport=%s stats=%s", sport, out)
         return out

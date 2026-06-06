@@ -57,19 +57,4 @@ def render_injury_ticker(db: SportsDatabase, sport: str) -> None:
         lines.append(f"⚠️ [{team}] {row['player_name']} — {row['status']}{suffix}")
 
     ticker = "　｜　".join(lines)
-    st.markdown(
-        f"""
-        <div style="
-            background: linear-gradient(90deg, #3d1a1a 0%, #1a1a2e 100%);
-            color: #ffcccc;
-            padding: 10px 14px;
-            border-radius: 8px;
-            border-left: 4px solid #e74c3c;
-            font-size: 0.92rem;
-            margin-bottom: 12px;
-            overflow-x: auto;
-            white-space: nowrap;
-        ">{ticker}</div>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.markdown(f"<div class='sq-injury-ticker'>{ticker}</div>", unsafe_allow_html=True)

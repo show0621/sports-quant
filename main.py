@@ -60,6 +60,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
 
 
 def cmd_sync(args: argparse.Namespace) -> None:
+    from sportsbet import config
     from sportsbet.data.database import SportsDatabase
     from sportsbet.data.db_github_sync import push_database_to_github
     from sportsbet.data.orchestrator import DataOrchestrator
@@ -96,18 +97,20 @@ def cmd_sync(args: argparse.Namespace) -> None:
             raise RuntimeError(f"未知 sync 模式: {args.mode}")
         logger.info("sync %s %s: %s", sp, args.mode, stats)
 
-    if args.push:
+    if args.push or config.GITHUB_AUTO_PUSH:
         push_database_to_github(message=f"chore(data): sync {args.mode} {args.sport}")
 
 
 def cmd_watch(args: argparse.Namespace) -> None:
+    from sportsbet import config as app_config
     from sportsbet.services.live_sync import run_watch_loop
 
     sports = ["nba", "mlb"] if args.sport == "all" else [args.sport]
+    push = app_config.WATCH_PUSH_GITHUB if not getattr(args, "no_push", False) else False
     run_watch_loop(
         sports=sports,  # type: ignore[arg-type]
         interval_sec=args.interval or None,
-        push_github=args.push,
+        push_github=push,
     )
 
 
@@ -231,7 +234,7 @@ def main() -> None:
     p_watch = sub.add_parser("watch", help="背景即時同步（常駐，供看板即時觀察）")
     p_watch.add_argument("--sport", choices=["nba", "mlb", "all"], default="all")
     p_watch.add_argument("--interval", type=int, default=0, help="秒；0=使用 LIVE_SYNC_INTERVAL_SEC")
-    p_watch.add_argument("--push", action="store_true", help="每次同步後推送 DB")
+    p_watch.add_argument("--no-push", action="store_true", help="關閉每次同步後推送 DB")
     p_watch.set_defaults(func=cmd_watch)
 
     p_bt = sub.add_parser("backtest", help="（已停用）請改用 refresh-backtest")

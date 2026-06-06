@@ -31,14 +31,14 @@ from sportsbet.services.data_refresh import run_full_backtest_refresh, run_incre
 from sportsbet.services.prediction_service import PredictionService  # noqa: E402
 from sportsbet.ui.live_monitor_page import page_live_monitor  # noqa: E402
 from sportsbet.ui.live_scoreboard import render_live_scoreboard  # noqa: E402
-from sportsbet.ui.theme import inject_dashboard_theme  # noqa: E402
+from sportsbet.ui.theme import inject_dashboard_theme, render_masthead  # noqa: E402
 from sportsbet.ui.hot_cold_page import page_player_hot_cold  # noqa: E402
 from sportsbet.ui.injury_ticker import render_injury_ticker  # noqa: E402
 from sportsbet.ui.upcoming_page import page_current_future_predictions  # noqa: E402
 from sportsbet.data.team_names import team_bilingual  # noqa: E402
 from sportsbet.ui.odds_display import _fmt_odds  # noqa: E402
 
-st.set_page_config(page_title="運彩量化看板", layout="wide", page_icon="📊")
+st.set_page_config(page_title="韻彩 · 賽事分析", layout="wide", page_icon="📊", initial_sidebar_state="expanded")
 
 
 def _pct(v: float | None) -> str:
@@ -506,8 +506,8 @@ def page_bankroll(sport: str) -> None:
 
 def main() -> None:
     inject_dashboard_theme()
-    st.sidebar.title("運彩量化看板")
-    sport = st.sidebar.selectbox("運動", ["nba", "mlb"])
+    st.sidebar.title("韻彩分析")
+    sport = st.sidebar.selectbox("運動項目", ["nba", "mlb"], format_func=lambda x: "NBA 籃球" if x == "nba" else "MLB 棒球")
     st.session_state.setdefault("last_api_error", "")
 
     def _show_sidebar_api_error(exc: Exception, *, prefix: str = "同步失敗") -> None:
@@ -574,10 +574,11 @@ def main() -> None:
     except Exception as exc:
         _show_sidebar_api_error(exc, prefix="資料載入失敗")
 
+    render_masthead(sport)
     render_injury_ticker(get_db(), sport)
 
     tab0, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
-        ["即時監控", "賽事預測", "回測覆盤", "球員熱區", "投注訊號", "模型健康度", "資金回測"]
+        ["即時賽況", "賽事預測", "歷史覆盤", "球員熱區", "投注訊號", "模型健康", "資金回測"]
     )
     with tab0:
         render_live_scoreboard(get_db(), sport)
