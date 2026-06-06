@@ -259,12 +259,37 @@ def build_game_market_picks(
     return {"moneyline": ml, "spread": spread, "total": total}
 
 
+def actual_result_line(
+    home_score: int | None,
+    away_score: int | None,
+    *,
+    home_team: str,
+    away_team: str,
+    sport: str,
+) -> str:
+    """完賽實際比分與勝方（供覆盤說明）。"""
+    if home_score is None or away_score is None:
+        return ""
+    hs, aws = int(home_score), int(away_score)
+    if hs > aws:
+        side = "主勝"
+    elif aws > hs:
+        side = "客勝"
+    else:
+        side = "平手"
+    return f"實際 {hs}–{aws}（{side}）"
+
+
 def _result_tag(pick: MarketPickView | None) -> str:
     if pick is None or pick.settled is None:
         return ""
+    if pick.market == "moneyline":
+        ok_txt, miss_txt = "✓ 預測正確", "✗ 預測錯誤"
+    else:
+        ok_txt, miss_txt = "✓ 過盤", "✗ 未過盤"
     if pick.settled:
-        return "<span class='sq-pred-hit sq-pred-ok'>✓ 過盤</span>"
-    return "<span class='sq-pred-hit sq-pred-miss'>✗ 未過</span>"
+        return f"<span class='sq-pred-hit sq-pred-ok'>{ok_txt}</span>"
+    return f"<span class='sq-pred-hit sq-pred-miss'>{miss_txt}</span>"
 
 
 def _ev_class(ev: float | None) -> str:
@@ -273,7 +298,12 @@ def _ev_class(ev: float | None) -> str:
     return "sq-pred-ev-pos" if float(ev) > 0 else "sq-pred-ev-neg"
 
 
-def format_market_pick_html(pick: MarketPickView | None, *, extra_sub: str = "") -> str:
+def format_market_pick_html(
+    pick: MarketPickView | None,
+    *,
+    extra_sub: str = "",
+    actual_line: str = "",
+) -> str:
     """渲染單格玩法：建議、賠率、EV、完賽結果。"""
     if pick is None:
         return "<div class='sq-pred-value'>—</div>"
@@ -281,7 +311,7 @@ def format_market_pick_html(pick: MarketPickView | None, *, extra_sub: str = "")
     prob_txt = f"模型 {_fmt_pct(pick.model_prob)}" if pick.model_prob is not None else ""
     ev_cls = _ev_class(pick.ev)
     ev_txt = f"<span class='{ev_cls}'>EV {_fmt_ev(pick.ev)}</span>" if pick.ev is not None else "EV —"
-    sub_parts = [p for p in [odds_txt, prob_txt, ev_txt, extra_sub] if p]
+    sub_parts = [p for p in [odds_txt, prob_txt, ev_txt, extra_sub, actual_line] if p]
     sub = " · ".join(sub_parts)
     result = _result_tag(pick)
     result_html = f"<div class='sq-pred-result'>{result}</div>" if result else ""

@@ -16,6 +16,7 @@ from sportsbet.ui.matchup_display import (
     team_bilingual_html,
 )
 from sportsbet.ui.odds_display import (
+    actual_result_line,
     build_game_market_picks,
     format_market_pick_html,
     summarize_game_odds,
@@ -185,7 +186,15 @@ def _render_prediction_strip(
     if margin is not None and not pd.isna(margin):
         margin_hint = f"模型淨勝 {float(margin):+.1f}"
 
-    ml_body = format_market_pick_html(picks.get("moneyline"), extra_sub=score_sub)
+    actual_txt = ""
+    if is_final and hs is not None and aws is not None:
+        actual_txt = actual_result_line(hs, aws, home_team=home, away_team=away, sport=sport)
+
+    ml_body = format_market_pick_html(
+        picks.get("moneyline"),
+        extra_sub=score_sub,
+        actual_line=actual_txt,
+    )
     spread_body = format_market_pick_html(picks.get("spread"), extra_sub=margin_hint)
     total_label = "大小分" if sport == "nba" else "大小分（總得分）"
 
@@ -198,7 +207,11 @@ def _render_prediction_strip(
                 continue
             mark = "✓" if p.settled else "✗"
             cls = "sq-pred-ok" if p.settled else "sq-pred-miss"
-            parts.append(f"<span class='sq-pred-hit {cls}'>{mark} {label}</span>")
+            if key == "moneyline":
+                tag = f"{mark} {label}{'正確' if p.settled else '錯誤'}"
+            else:
+                tag = f"{mark} {label}"
+            parts.append(f"<span class='sq-pred-hit {cls}'>{tag}</span>")
         if parts:
             summary_tags = f"<div class='sq-pred-summary'>{''.join(parts)}</div>"
 
