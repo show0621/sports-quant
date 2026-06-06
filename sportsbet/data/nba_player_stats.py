@@ -153,8 +153,10 @@ def sync_nba_player_stats(
             continue
         espn_pid, display_name, espn_team = match
         team_abbr = str(row.get("TEAM_ABBREVIATION") or "")
-        team = canonical_team_name(team_abbr, "nba") if team_abbr else espn_team
-        team = resolve_team_in_database(db, "nba", team)
+        if team_abbr:
+            team = canonical_team_name(team_abbr, "nba")
+        else:
+            team = resolve_team_in_database(db, "nba", espn_team)
 
         off_rating = float(row["OFF_RATING"]) if pd.notna(row.get("OFF_RATING")) else None
         def_rating = float(row["DEF_RATING"]) if pd.notna(row.get("DEF_RATING")) else None

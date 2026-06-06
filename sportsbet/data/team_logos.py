@@ -21,6 +21,41 @@ NBA_ALIASES: dict[str, str] = {
     "Thunder": "Oklahoma City Thunder",
 }
 
+# nba_api TEAM_ABBREVIATION → 標準全名（players 表與 games 表對齊）
+NBA_ABBREV: dict[str, str] = {
+    "ATL": "Atlanta Hawks",
+    "BOS": "Boston Celtics",
+    "BKN": "Brooklyn Nets",
+    "BRK": "Brooklyn Nets",
+    "CHA": "Charlotte Hornets",
+    "CHI": "Chicago Bulls",
+    "CLE": "Cleveland Cavaliers",
+    "DAL": "Dallas Mavericks",
+    "DEN": "Denver Nuggets",
+    "DET": "Detroit Pistons",
+    "GSW": "Golden State Warriors",
+    "HOU": "Houston Rockets",
+    "IND": "Indiana Pacers",
+    "LAC": "LA Clippers",
+    "LAL": "Los Angeles Lakers",
+    "MEM": "Memphis Grizzlies",
+    "MIA": "Miami Heat",
+    "MIL": "Milwaukee Bucks",
+    "MIN": "Minnesota Timberwolves",
+    "NOP": "New Orleans Pelicans",
+    "NYK": "New York Knicks",
+    "OKC": "Oklahoma City Thunder",
+    "ORL": "Orlando Magic",
+    "PHI": "Philadelphia 76ers",
+    "PHX": "Phoenix Suns",
+    "POR": "Portland Trail Blazers",
+    "SAC": "Sacramento Kings",
+    "SAS": "San Antonio Spurs",
+    "TOR": "Toronto Raptors",
+    "UTA": "Utah Jazz",
+    "WAS": "Washington Wizards",
+}
+
 MLB_ALIASES: dict[str, str] = {
     "Yankees": "New York Yankees",
     "Dodgers": "Los Angeles Dodgers",
@@ -107,7 +142,26 @@ MLB_ESPN: dict[str, str] = {
 
 def canonical_team_name(team: str, sport: Sport) -> str:
     aliases = NBA_ALIASES if sport == "nba" else MLB_ALIASES
-    return aliases.get(team, team)
+    t = team.strip()
+    if sport == "nba" and t.upper() in NBA_ABBREV:
+        return NBA_ABBREV[t.upper()]
+    return aliases.get(t, t)
+
+
+def team_name_variants(team: str, sport: Sport) -> set[str]:
+    """同一隊所有常見寫法（全名、縮寫、別名）。"""
+    names: set[str] = {team.strip()}
+    canonical = canonical_team_name(team, sport)
+    names.add(canonical)
+    if sport == "nba":
+        for abbr, full in NBA_ABBREV.items():
+            if full == canonical or abbr == team.strip().upper():
+                names.add(abbr)
+                names.add(full)
+        nick = canonical.split()[-1] if canonical else ""
+        if nick:
+            names.add(nick)
+    return {n for n in names if n}
 
 
 def resolve_team_in_database(db, sport: Sport, candidate: str) -> str:

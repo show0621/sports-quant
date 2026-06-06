@@ -890,18 +890,22 @@ class SportsDatabase:
             )
 
     def get_players_by_team(self, sport: Sport, team: str) -> pd.DataFrame:
+        from sportsbet.data.team_logos import team_name_variants
+
+        variants = list(team_name_variants(team, sport))
+        placeholders = ",".join("?" for _ in variants)
         with self.connection() as conn:
             return pd.read_sql_query(
-                """
+                f"""
                 SELECT p.*, s.bpm, s.vorp, s.usg_pct, s.pace, s.war, s.wrc_plus, s.fip,
                        s.rolling_off_rating, s.hot_cold_index, s.window_games, s.as_of_date
                 FROM players p
                 LEFT JOIN player_advanced_stats s ON s.sport = p.sport AND s.player_id = p.player_id
-                WHERE p.sport = ? AND p.team = ?
+                WHERE p.sport = ? AND p.team IN ({placeholders})
                 ORDER BY COALESCE(s.vorp, s.war, 0) DESC
                 """,
                 conn,
-                params=(sport, team),
+                params=(sport, *variants),
             )
 
     def clear_injuries(self, sport: Sport, *, source: str | None = "espn") -> int:
