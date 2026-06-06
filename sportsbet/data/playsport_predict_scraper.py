@@ -62,18 +62,43 @@ class PlaySportMemberGame:
     tw_ml_home: MemberMarketSide = field(default_factory=MemberMarketSide)
     tw_over: MemberMarketSide = field(default_factory=MemberMarketSide)
     tw_under: MemberMarketSide = field(default_factory=MemberMarketSide)
+    # 玩運彩版面：winnerteam=客隊、secondteam=主隊（與運彩盤 客/主 一致）
+    ps_away_en: str = ""
+    ps_home_en: str = ""
 
-    def to_consensus_rows(self) -> list[dict[str, Any]]:
+    def to_db_consensus_rows(
+        self,
+        db_home: str,
+        db_away: str,
+    ) -> list[dict[str, Any]]:
+        """依 DB 主客隊對齊會員占比（避免 winnerteam 與 DB 主客不一致）。"""
         rows: list[dict[str, Any]] = []
-        for market, side, obj in (
-            ("spread", "away", self.tw_spread_away),
-            ("spread", "home", self.tw_spread_home),
-            ("moneyline", "away", self.tw_ml_away),
-            ("moneyline", "home", self.tw_ml_home),
-            ("total", "over", self.tw_over),
-            ("total", "under", self.tw_under),
+
+        def _db_sel(ps_side: str) -> str | None:
+            """ps_side: away/home/over/under → DB selection。"""
+            if ps_side == "over":
+                return "over"
+            if ps_side == "under":
+                return "under"
+            ps_team = self.ps_away_en if ps_side == "away" else self.ps_home_en
+            if ps_team == db_home:
+                return "home"
+            if ps_team == db_away:
+                return "away"
+            return None
+
+        for ps_side, market, obj in (
+            ("away", "moneyline", self.tw_ml_away),
+            ("home", "moneyline", self.tw_ml_home),
+            ("away", "spread", self.tw_spread_away),
+            ("home", "spread", self.tw_spread_home),
+            ("over", "total", self.tw_over),
+            ("under", "total", self.tw_under),
         ):
             if obj.pct is None:
+                continue
+            sel = _db_sel(ps_side)
+            if sel is None:
                 continue
             rows.append(
                 {
@@ -83,7 +108,7 @@ class PlaySportMemberGame:
                     "member_tier": self.member_tier,
                     "board": "tw",
                     "market": market,
-                    "selection": side,
+                    "selection": sel,
                     "member_pct": obj.pct,
                     "sample_size": obj.count,
                     "line": obj.line,
@@ -103,10 +128,13 @@ def _parse_pct_count(text: str) -> tuple[float | None, int | None]:
 
 def _parse_line_odds(text: str) -> tuple[float | None, float | None]:
     line = odds = None
-    lm = _LINE_RE.search(text.replace(" ", ""))
-    if lm:
+    compact = text.replace(" ", "")
+    m = re.search(r"([+-]?\d+\.?\d*)\s*,", compact)
+    if not m:
+        m = re.search(r"([+-]?\d+\.?\d*)", compact)
+    if m:
         try:
-            line = float(lm.group(1))
+            line = float(m.group(1))
         except ValueError:
             pass
     om = _ODDS_TAIL_RE.search(text)
@@ -118,16 +146,31 @@ def _parse_line_odds(text: str) -> tuple[float | None, float | None]:
     return line, odds
 
 
-def _parse_bank_pair(bet_td, predict_td) -> MemberMarketSide:
+def _bank_row_side(bet_txt: str) -> str | None:
+    t = bet_txt.strip()
+    if t.startswith("客") or t[:4].find("客") >= 0:
+        return "away"
+    if t.startswith("主") or t[:4].find("主") >= 0:
+        return "home"
+    if "大" in t[:3]:
+        return "over"
+    if "小" in t[:3]:
+        return "under"
+    return None
+
+
+def _parse_bank_pair(bet_td, predict_td) -> tuple[str | None, MemberMarketSide]:
     bet_txt = bet_td.get_text(" ", strip=True) if bet_td else ""
     pred_txt = predict_td.get_text(" ", strip=True) if predict_td else ""
     pct, count = _parse_pct_count(pred_txt)
     line, odds = _parse_line_odds(bet_txt)
-    return MemberMarketSide(pct=pct, count=count, line=line, odds=odds)
+    side = _bank_row_side(bet_txt)
+    return side, MemberMarketSide(pct=pct, count=count, line=line, odds=odds)
 
 
-def _extract_bank_cols(tr) -> dict[str, MemberMarketSide]:
-    out: dict[str, MemberMarketSide] = {}
+def _extract_bank_cols(tr) -> list[tuple[str, str, MemberMarketSide]]:
+    """回傳 [(market, ps_side, data), ...]。"""
+    out: list[tuple[str, str, MemberMarketSide]] = []
     tds = tr.find_all("td", recursive=False)
     i = 0
     while i < len(tds):
@@ -135,26 +178,36 @@ def _extract_bank_cols(tr) -> dict[str, MemberMarketSide]:
         cls = " ".join(td.get("class") or [])
         pred = tds[i + 1] if i + 1 < len(tds) else None
         if "td-bank-bet01" in cls:
-            out["spread"] = _parse_bank_pair(td, pred)
+            side, data = _parse_bank_pair(td, pred)
+            if side in ("away", "home"):
+                out.append(("spread", side, data))
             i += 2
         elif "td-bank-bet03" in cls:
-            out["moneyline"] = _parse_bank_pair(td, pred)
+            side, data = _parse_bank_pair(td, pred)
+            if side in ("away", "home"):
+                out.append(("moneyline", side, data))
             i += 2
         elif "td-bank-bet02" in cls:
-            out["total"] = _parse_bank_pair(td, pred)
+            side, data = _parse_bank_pair(td, pred)
+            if side in ("over", "under"):
+                out.append(("total", side, data))
             i += 2
         else:
             i += 1
     return out
 
 
-def _assign_spread(g: PlaySportMemberGame, side: MemberMarketSide) -> None:
-    if side.line is None:
-        return
-    if side.line > 0:
-        g.tw_spread_away = side
-    else:
-        g.tw_spread_home = side
+def _apply_bank_entry(g: PlaySportMemberGame, market: str, side: str, data: MemberMarketSide) -> None:
+    key = {
+        ("moneyline", "away"): "tw_ml_away",
+        ("moneyline", "home"): "tw_ml_home",
+        ("spread", "away"): "tw_spread_away",
+        ("spread", "home"): "tw_spread_home",
+        ("total", "over"): "tw_over",
+        ("total", "under"): "tw_under",
+    }.get((market, side))
+    if key:
+        setattr(g, key, data)
 
 
 def _parse_game_blocks(
@@ -194,24 +247,13 @@ def _parse_game_blocks(
             team_b_zh=zh_b,
             team_a_en=en_a,
             team_b_en=en_b,
+            ps_away_en=en_a,
+            ps_home_en=en_b,
         )
 
-        r0 = bank_rows[0]
-        if "moneyline" in r0:
-            g.tw_ml_away = r0["moneyline"]
-        if "total" in r0:
-            g.tw_over = r0["total"]
-        if "spread" in r0:
-            _assign_spread(g, r0["spread"])
-
-        if len(bank_rows) >= 2:
-            r1 = bank_rows[1]
-            if "moneyline" in r1:
-                g.tw_ml_home = r1["moneyline"]
-            if "total" in r1:
-                g.tw_under = r1["total"]
-            if "spread" in r1:
-                _assign_spread(g, r1["spread"])
+        for tr in trs:
+            for market, side, data in _extract_bank_cols(tr):
+                _apply_bank_entry(g, market, side, data)
 
         games.append(g)
     return games

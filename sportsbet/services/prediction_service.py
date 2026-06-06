@@ -284,6 +284,12 @@ class PredictionService:
                 sync_member_consensus_recent(self.db, sport)
             except Exception as exc:
                 logger.warning("玩運彩會員預測同步略過: %s", exc)
+            try:
+                from sportsbet.services.data_refresh import rebuild_v2_predictions_from_member_consensus
+
+                rebuild_v2_predictions_from_member_consensus(self.db, sport, replace_all=True)
+            except Exception as exc:
+                logger.warning("V2 predictions 略過: %s", exc)
         games = self._collect_dashboard_games(sport, days_ahead=days_ahead)
         if games.empty:
             return []

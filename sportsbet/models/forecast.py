@@ -69,7 +69,7 @@ class GameForecast:
     sim_result: Any | None = None  # MonteCarloResult when enabled
     prob_breakdown: Any | None = None  # ProbabilityBreakdown from ensemble engine
     pipeline: Any | None = None  # BayesianForecastPipeline
-    # V2：模型 + 玩運彩 60%+ 會員預測比例修正
+    # V2：玩運彩 60%+ 會員預測（獨立主線，V1 模型不變）
     home_win_prob_v2: float | None = None
     away_win_prob_v2: float | None = None
     prob_over_v2: float | None = None
@@ -529,14 +529,7 @@ def build_game_forecast(
         except Exception:
             consensus_row = None
     consensus = snapshot_from_db_row(consensus_row)
-    v2 = compute_forecast_v2(
-        sport=sport,
-        home_win_prob=home_prob,
-        prob_over=prob_o,
-        predicted_margin=pred_margin,
-        spread_home_line=spread_home_line,
-        consensus=consensus,
-    )
+    v2 = compute_forecast_v2(consensus=consensus)
 
     actual_winner = None
     pick_correct = None

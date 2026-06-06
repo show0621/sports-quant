@@ -1,12 +1,10 @@
-"""玩運彩 60%+ 會員共識 → 模型機率 V2 修正。"""
+"""玩運彩 60%+ 會員共識 → V2 機率（獨立主線，不修改 V1 模型）。"""
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
 
 from sportsbet import config
-from sportsbet.models.calibration import calibrate_spread_prob, calibrate_win_prob
-from sportsbet.models.totals import prob_home_covers_spread
 
 
 @dataclass
@@ -27,8 +25,11 @@ class MemberConsensusSnapshot:
             v is not None
             for v in (
                 self.ml_home_pct,
+                self.ml_away_pct,
                 self.spread_home_pct,
+                self.spread_away_pct,
                 self.over_pct,
+                self.under_pct,
             )
         )
 
@@ -50,15 +51,10 @@ def snapshot_from_db_row(row: dict[str, Any] | None) -> MemberConsensusSnapshot 
     return snap if snap.has_any else None
 
 
-def _blend(model_p: float | None, member_p: float | None, weight: float) -> float | None:
-    if model_p is None:
+def _clip_prob(p: float | None) -> float | None:
+    if p is None:
         return None
-    if member_p is None or weight <= 0:
-        return model_p
-    m = max(0.05, min(0.95, float(member_p)))
-    p = max(0.05, min(0.95, float(model_p)))
-    w = max(0.0, min(1.0, weight))
-    return max(0.05, min(0.95, (1.0 - w) * p + w * m))
+    return max(0.05, min(0.95, float(p)))
 
 
 @dataclass
@@ -74,63 +70,50 @@ class ForecastV2Probs:
 
 def compute_forecast_v2(
     *,
-    sport: str,
-    home_win_prob: float,
-    prob_over: float | None,
-    predicted_margin: float | None,
-    spread_home_line: float | None,
     consensus: MemberConsensusSnapshot | None,
 ) -> ForecastV2Probs:
-    """模型 V1 機率 + 玩運彩 60%+ 會員占比 → V2。"""
+    """
+    V2 = 玩運彩 60%+ 會員預測占比（純會員線，不與 V1 模型混合）。
+    無會員資料時全部為 None。
+    """
     if not config.MEMBER_CONSENSUS_ENABLED or consensus is None or not consensus.has_any:
-        spread_home = None
-        if predicted_margin is not None and spread_home_line is not None:
-            spread_home = prob_home_covers_spread(float(spread_home_line), float(predicted_margin))
-        return ForecastV2Probs(
-            home_win_prob_v2=home_win_prob,
-            away_win_prob_v2=1.0 - home_win_prob,
-            prob_over_v2=prob_over,
-            prob_under_v2=(1.0 - prob_over) if prob_over is not None else None,
-            prob_home_cover_v2=spread_home,
-            prob_away_cover_v2=(1.0 - spread_home) if spread_home is not None else None,
-            member=consensus,
-        )
+        return ForecastV2Probs(member=consensus)
 
-    ml_home = _blend(
-        home_win_prob,
-        consensus.ml_home_pct,
-        config.MEMBER_CONSENSUS_BLEND_ML,
-    )
-    if ml_home is not None:
-        ml_home = calibrate_win_prob(ml_home, sport)  # type: ignore[arg-type]
+    ml_h = _clip_prob(consensus.ml_home_pct)
+    ml_a = _clip_prob(consensus.ml_away_pct)
+    if ml_h is not None and ml_a is not None:
+        s = ml_h + ml_a
+        if s > 0:
+            ml_h, ml_a = ml_h / s, ml_a / s
+    elif ml_h is not None:
+        ml_a = 1.0 - ml_h
+    elif ml_a is not None:
+        ml_h = 1.0 - ml_a
 
-    prob_o_v2 = prob_over
-    if prob_over is not None and consensus.over_pct is not None:
-        prob_o_v2 = _blend(prob_over, consensus.over_pct, config.MEMBER_CONSENSUS_BLEND_TOTAL)
-        if prob_o_v2 is not None:
-            prob_o_v2 = max(0.05, min(0.95, prob_o_v2))
+    sp_h = _clip_prob(consensus.spread_home_pct)
+    sp_a = _clip_prob(consensus.spread_away_pct)
+    if sp_h is not None and sp_a is not None:
+        s = sp_h + sp_a
+        if s > 0:
+            sp_h, sp_a = sp_h / s, sp_a / s
 
-    spread_home_model = None
-    if predicted_margin is not None and spread_home_line is not None:
-        spread_home_model = prob_home_covers_spread(float(spread_home_line), float(predicted_margin))
+    ov = _clip_prob(consensus.over_pct)
+    un = _clip_prob(consensus.under_pct)
+    if ov is not None and un is not None:
+        s = ov + un
+        if s > 0:
+            ov, un = ov / s, un / s
+    elif ov is not None:
+        un = 1.0 - ov
+    elif un is not None:
+        ov = 1.0 - un
 
-    spread_home_v2 = spread_home_model
-    if spread_home_model is not None and consensus.spread_home_pct is not None:
-        spread_home_v2 = _blend(
-            spread_home_model,
-            consensus.spread_home_pct,
-            config.MEMBER_CONSENSUS_BLEND_SPREAD,
-        )
-        if spread_home_v2 is not None:
-            spread_home_v2 = calibrate_spread_prob(spread_home_v2, sport)  # type: ignore[arg-type]
-
-    home_v2 = ml_home if ml_home is not None else home_win_prob
     return ForecastV2Probs(
-        home_win_prob_v2=home_v2,
-        away_win_prob_v2=1.0 - home_v2,
-        prob_over_v2=prob_o_v2,
-        prob_under_v2=(1.0 - prob_o_v2) if prob_o_v2 is not None else None,
-        prob_home_cover_v2=spread_home_v2,
-        prob_away_cover_v2=(1.0 - spread_home_v2) if spread_home_v2 is not None else None,
+        home_win_prob_v2=ml_h,
+        away_win_prob_v2=ml_a,
+        prob_over_v2=ov,
+        prob_under_v2=un,
+        prob_home_cover_v2=sp_h,
+        prob_away_cover_v2=sp_a,
         member=consensus,
     )

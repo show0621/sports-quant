@@ -20,17 +20,18 @@ def _match_game_id(
     match_date: str,
     team_a: str,
     team_b: str,
-) -> int | None:
+) -> tuple[int | None, str | None, str | None]:
+    """回傳 (game_id, db_home, db_away)。"""
     games = db.get_games(sport, match_date)
     if games.empty:
-        return None
+        return None, None, None
     a = resolve_team_in_database(db, sport, team_a)  # type: ignore[arg-type]
     b = resolve_team_in_database(db, sport, team_b)  # type: ignore[arg-type]
     for ha, aa in ((a, b), (b, a)):
         hit = games[(games["home_team"] == ha) & (games["away_team"] == aa)]
         if not hit.empty:
-            return int(hit.iloc[0]["id"])
-    return None
+            return int(hit.iloc[0]["id"]), str(ha), str(aa)
+    return None, None, None
 
 
 def sync_member_consensus_for_date(
@@ -52,10 +53,10 @@ def sync_member_consensus_for_date(
 
     n = 0
     for g in games:
-        gid = _match_game_id(db, sport, match_date, g.team_a_en, g.team_b_en)
-        if gid is None:
+        gid, db_home, db_away = _match_game_id(db, sport, match_date, g.team_a_en, g.team_b_en)
+        if gid is None or not db_home or not db_away:
             continue
-        for row in g.to_consensus_rows():
+        for row in g.to_db_consensus_rows(db_home, db_away):
             row["game_id"] = gid
             db.upsert_member_consensus(row)
             n += 1

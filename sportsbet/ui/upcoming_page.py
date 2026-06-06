@@ -171,8 +171,8 @@ def _render_forecast_card(
         render_odds_panel(svc.db, fc, sport)
 
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("主隊勝率（最終）", _pct(fc.home_win_prob))
-        c2.metric("客隊勝率（最終）", _pct(fc.away_win_prob))
+        c1.metric("主隊勝率（V1 模型）", _pct(fc.home_win_prob))
+        c2.metric("客隊勝率（V1 模型）", _pct(fc.away_win_prob))
         c3.metric("預估總分", f"{fc.predicted_total:.1f}")
         c4.metric("預估分差", f"{fc.predicted_margin:+.1f}")
 
@@ -194,22 +194,23 @@ def _render_forecast_card(
         c7.metric("小分機率" if sport == "nba" else "小機率", _pct(fc.prob_under))
         st.caption(fc.margin_note)
 
-        has_v2 = (
-            getattr(fc, "home_win_prob_v2", None) is not None
-            and getattr(fc, "member_ml_home_pct", None) is not None
-        )
-        if has_v2:
-            st.markdown("**V2 修正機率（模型 + 玩運彩 60%+ 會員預測）**")
-            v1, v2, v3, v4 = st.columns(4)
-            v1.metric("V2 主勝", _pct(fc.home_win_prob_v2))
-            v2.metric("V2 大分" if sport == "nba" else "V2 大", _pct(fc.prob_over_v2))
-            v3.metric("V2 主讓分過盤", _pct(fc.prob_home_cover_v2))
-            m_ml = fc.member_ml_home_pct
-            m_sp = fc.member_spread_home_pct
-            m_ov = fc.member_over_pct
+        if getattr(fc, "home_win_prob_v2", None) is not None:
+            st.markdown("**V2 玩運彩 60%+ 會員（獨立主線，不修改 V1）**")
+            v2c1, v2c2, v2c3, v2c4 = st.columns(4)
+            v2c1.metric("V2 主勝", _pct(fc.home_win_prob_v2))
+            v2c2.metric("V2 客勝", _pct(fc.away_win_prob_v2))
+            v2c3.metric("V2 大分" if sport == "nba" else "V2 大", _pct(fc.prob_over_v2))
+            sp_away = (
+                (1.0 - fc.prob_home_cover_v2)
+                if fc.prob_home_cover_v2 is not None
+                else None
+            )
+            v2c4.metric("V2 客讓分過盤", _pct(sp_away))
             st.caption(
                 "會員占比（運彩盤）· "
-                f"不讓分主 {_pct(m_ml)} · 讓分主 {_pct(m_sp)} · 大分 {_pct(m_ov)}"
+                f"不讓分 主 {_pct(fc.member_ml_home_pct)} / 客 {_pct(fc.away_win_prob_v2)} · "
+                f"讓分 主 {_pct(fc.member_spread_home_pct)} / 客 {_pct(sp_away)} · "
+                f"大分 {_pct(fc.member_over_pct)}"
             )
 
         sim = getattr(fc, "sim_result", None)
