@@ -1,10 +1,13 @@
 """產生、儲存與覆盤賽事預測。"""
 from __future__ import annotations
 
+import logging
 from datetime import date, timedelta
 from typing import Literal
 
 import pandas as pd
+
+from sportsbet import config
 
 from sportsbet.data.database import SportsDatabase
 from sportsbet.data.point_in_time_stats import PointInTimeStatsBuilder
@@ -18,6 +21,8 @@ from sportsbet.models.forecast import (
 )
 
 Sport = Literal["nba", "mlb"]
+
+logger = logging.getLogger(__name__)
 
 _FINISHED = ("final", "FT", "AOT", "Finished", "POST")
 
@@ -272,6 +277,13 @@ class PredictionService:
         from sportsbet.ui.matchup_display import taipei_match_date
 
         self._refresh_team_stats(sport)
+        if config.MEMBER_CONSENSUS_ENABLED:
+            try:
+                from sportsbet.data.member_consensus_sync import sync_member_consensus_recent
+
+                sync_member_consensus_recent(self.db, sport)
+            except Exception as exc:
+                logger.warning("玩運彩會員預測同步略過: %s", exc)
         games = self._collect_dashboard_games(sport, days_ahead=days_ahead)
         if games.empty:
             return []

@@ -69,6 +69,15 @@ class GameForecast:
     sim_result: Any | None = None  # MonteCarloResult when enabled
     prob_breakdown: Any | None = None  # ProbabilityBreakdown from ensemble engine
     pipeline: Any | None = None  # BayesianForecastPipeline
+    # V2：模型 + 玩運彩 60%+ 會員預測比例修正
+    home_win_prob_v2: float | None = None
+    away_win_prob_v2: float | None = None
+    prob_over_v2: float | None = None
+    prob_under_v2: float | None = None
+    prob_home_cover_v2: float | None = None
+    member_ml_home_pct: float | None = None
+    member_spread_home_pct: float | None = None
+    member_over_pct: float | None = None
 
     def to_db_row(self) -> dict[str, Any]:
         row = {
@@ -117,6 +126,14 @@ class GameForecast:
             "away_adjusted_rating": self.away_adjusted_rating,
             "home_injury_penalty": self.home_injury_penalty,
             "away_injury_penalty": self.away_injury_penalty,
+            "home_win_prob_v2": self.home_win_prob_v2,
+            "away_win_prob_v2": self.away_win_prob_v2,
+            "prob_over_v2": self.prob_over_v2,
+            "prob_under_v2": self.prob_under_v2,
+            "prob_home_cover_v2": self.prob_home_cover_v2,
+            "member_ml_home_pct": self.member_ml_home_pct,
+            "member_spread_home_pct": self.member_spread_home_pct,
+            "member_over_pct": self.member_over_pct,
         }
         return row
 
@@ -191,6 +208,14 @@ def game_forecast_from_db_row(row: pd.Series, game: pd.Series | None = None) -> 
         away_injury_penalty=float(row["away_injury_penalty"]) if pd.notna(row.get("away_injury_penalty")) else None,
         season_type=str(g["season_type"]) if g is not None and pd.notna(g.get("season_type")) else None,
         competition_note=str(g["competition_note"]) if g is not None and pd.notna(g.get("competition_note")) else None,
+        home_win_prob_v2=float(row["home_win_prob_v2"]) if pd.notna(row.get("home_win_prob_v2")) else None,
+        away_win_prob_v2=float(row["away_win_prob_v2"]) if pd.notna(row.get("away_win_prob_v2")) else None,
+        prob_over_v2=float(row["prob_over_v2"]) if pd.notna(row.get("prob_over_v2")) else None,
+        prob_under_v2=float(row["prob_under_v2"]) if pd.notna(row.get("prob_under_v2")) else None,
+        prob_home_cover_v2=float(row["prob_home_cover_v2"]) if pd.notna(row.get("prob_home_cover_v2")) else None,
+        member_ml_home_pct=float(row["member_ml_home_pct"]) if pd.notna(row.get("member_ml_home_pct")) else None,
+        member_spread_home_pct=float(row["member_spread_home_pct"]) if pd.notna(row.get("member_spread_home_pct")) else None,
+        member_over_pct=float(row["member_over_pct"]) if pd.notna(row.get("member_over_pct")) else None,
     )
     from sportsbet.models.bayesian_pipeline import ensure_forecast_pipeline
 
@@ -492,6 +517,27 @@ def build_game_forecast(
     if sim_result is not None:
         margin_note += f" · {sim_result.summary_line(sport=sport)}"
 
+    from sportsbet.models.member_consensus_v2 import (
+        compute_forecast_v2,
+        snapshot_from_db_row,
+    )
+
+    consensus_row = None
+    if db is not None and game_id:
+        try:
+            consensus_row = db.get_member_consensus_snapshot(int(game_id))
+        except Exception:
+            consensus_row = None
+    consensus = snapshot_from_db_row(consensus_row)
+    v2 = compute_forecast_v2(
+        sport=sport,
+        home_win_prob=home_prob,
+        prob_over=prob_o,
+        predicted_margin=pred_margin,
+        spread_home_line=spread_home_line,
+        consensus=consensus,
+    )
+
     actual_winner = None
     pick_correct = None
     margin_error = None
@@ -561,6 +607,14 @@ def build_game_forecast(
         h2h_recent_games=h2h_recent_games or None,
         sim_result=sim_result,
         prob_breakdown=prob_breakdown,
+        home_win_prob_v2=v2.home_win_prob_v2,
+        away_win_prob_v2=v2.away_win_prob_v2,
+        prob_over_v2=v2.prob_over_v2,
+        prob_under_v2=v2.prob_under_v2,
+        prob_home_cover_v2=v2.prob_home_cover_v2,
+        member_ml_home_pct=consensus.ml_home_pct if consensus else None,
+        member_spread_home_pct=consensus.spread_home_pct if consensus else None,
+        member_over_pct=consensus.over_pct if consensus else None,
     )
     from sportsbet.models.bayesian_pipeline import build_pipeline_from_forecast
 
@@ -621,6 +675,11 @@ def forecast_pick_dict(fc: GameForecast) -> dict[str, Any]:
         "total_line": fc.total_line,
         "prob_over": fc.prob_over,
         "prob_under": fc.prob_under,
+        "home_win_prob_v2": fc.home_win_prob_v2,
+        "away_win_prob_v2": fc.away_win_prob_v2,
+        "prob_over_v2": fc.prob_over_v2,
+        "prob_under_v2": fc.prob_under_v2,
+        "prob_home_cover_v2": fc.prob_home_cover_v2,
         "predicted_home_score": fc.predicted_home_score,
         "predicted_away_score": fc.predicted_away_score,
         "pick_correct": fc.pick_correct,

@@ -91,8 +91,22 @@ def _card_title(fc, sport: str) -> str:
     )
 
 
+def _box_score_columns(stats: pd.DataFrame) -> list[str]:
+    cols = ["player_name", "team", "points", "rebounds", "assists", "minutes"]
+    return [c for c in cols if c in stats.columns]
+
+
 def _render_h2h_box_context(fc, sport: str, svc: PredictionService) -> None:
     """顯示近期對戰 box score（逐節 + 得分王）。"""
+    try:
+        _render_h2h_box_context_inner(fc, sport, svc)
+    except Exception as exc:
+        import logging
+
+        logging.getLogger(__name__).warning("H2H box score 顯示略過: %s", exc)
+
+
+def _render_h2h_box_context_inner(fc, sport: str, svc: PredictionService) -> None:
     db = svc.db
     md = str(getattr(fc, "match_date", ""))[:10]
     home = getattr(fc, "home_team", "")
@@ -113,8 +127,9 @@ def _render_h2h_box_context(fc, sport: str, svc: PredictionService) -> None:
                     f"主 Q1–Q4: {q.get('home_q1','—')}-{q.get('home_q2','—')}-"
                     f"{q.get('home_q3','—')}-{q.get('home_q4','—')}"
                 )
-            show = stats.head(6)[["player_name", "team", "points", "rebounds", "assists", "minutes"]]
-            st.dataframe(show, use_container_width=True, hide_index=True)
+            cols = _box_score_columns(stats)
+            if cols:
+                st.dataframe(stats.head(6)[cols], use_container_width=True, hide_index=True)
         return
 
     g = h2h.iloc[0]
@@ -131,8 +146,9 @@ def _render_h2h_box_context(fc, sport: str, svc: PredictionService) -> None:
             f"{q.get('home_q3','—')}-{q.get('home_q4','—')}"
         )
     if not stats.empty:
-        show = stats.head(8)[["player_name", "team", "points", "rebounds", "assists", "minutes"]]
-        st.dataframe(show, use_container_width=True, hide_index=True)
+        cols = _box_score_columns(stats)
+        if cols:
+            st.dataframe(stats.head(8)[cols], use_container_width=True, hide_index=True)
 
 
 def _render_forecast_card(
@@ -177,6 +193,24 @@ def _render_forecast_card(
         c6.metric("大分機率" if sport == "nba" else "大機率", _pct(fc.prob_over))
         c7.metric("小分機率" if sport == "nba" else "小機率", _pct(fc.prob_under))
         st.caption(fc.margin_note)
+
+        has_v2 = (
+            getattr(fc, "home_win_prob_v2", None) is not None
+            and getattr(fc, "member_ml_home_pct", None) is not None
+        )
+        if has_v2:
+            st.markdown("**V2 修正機率（模型 + 玩運彩 60%+ 會員預測）**")
+            v1, v2, v3, v4 = st.columns(4)
+            v1.metric("V2 主勝", _pct(fc.home_win_prob_v2))
+            v2.metric("V2 大分" if sport == "nba" else "V2 大", _pct(fc.prob_over_v2))
+            v3.metric("V2 主讓分過盤", _pct(fc.prob_home_cover_v2))
+            m_ml = fc.member_ml_home_pct
+            m_sp = fc.member_spread_home_pct
+            m_ov = fc.member_over_pct
+            st.caption(
+                "會員占比（運彩盤）· "
+                f"不讓分主 {_pct(m_ml)} · 讓分主 {_pct(m_sp)} · 大分 {_pct(m_ov)}"
+            )
 
         sim = getattr(fc, "sim_result", None)
         if sim is not None:

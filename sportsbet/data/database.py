@@ -1,6 +1,9 @@
 """SQLite 本地資料庫：賽程、賠率、球隊統計與預測紀錄。"""
 from __future__ import annotations
 
+import logging
+import os
+import shutil
 import sqlite3
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
@@ -10,6 +13,8 @@ from typing import Any, Generator, Literal
 import pandas as pd
 
 from sportsbet import config
+
+logger = logging.getLogger(__name__)
 
 Sport = Literal["nba", "mlb"]
 
@@ -248,6 +253,27 @@ CREATE TABLE IF NOT EXISTS game_quarter_scores (
     updated_at TEXT DEFAULT (datetime('now')),
     FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS member_consensus (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_id INTEGER NOT NULL,
+    sport TEXT NOT NULL,
+    match_date TEXT NOT NULL,
+    source TEXT DEFAULT 'playsport',
+    member_tier TEXT DEFAULT 'win60',
+    board TEXT DEFAULT 'tw',
+    market TEXT NOT NULL,
+    selection TEXT NOT NULL,
+    member_pct REAL,
+    sample_size INTEGER,
+    line REAL,
+    odds REAL,
+    playsport_game_id TEXT,
+    scraped_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(game_id, source, member_tier, board, market, selection),
+    FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_member_consensus_date ON member_consensus(sport, match_date);
 """
 
 _MIGRATION_COLUMNS = [
@@ -261,6 +287,14 @@ _MIGRATION_COLUMNS = [
     ("game_forecasts", "away_win_prob_base", "REAL"),
     ("game_forecasts", "home_injury_adj", "REAL"),
     ("game_forecasts", "away_injury_adj", "REAL"),
+    ("game_forecasts", "home_win_prob_v2", "REAL"),
+    ("game_forecasts", "away_win_prob_v2", "REAL"),
+    ("game_forecasts", "prob_over_v2", "REAL"),
+    ("game_forecasts", "prob_under_v2", "REAL"),
+    ("game_forecasts", "prob_home_cover_v2", "REAL"),
+    ("game_forecasts", "member_ml_home_pct", "REAL"),
+    ("game_forecasts", "member_spread_home_pct", "REAL"),
+    ("game_forecasts", "member_over_pct", "REAL"),
     ("games", "season_type", "TEXT"),
     ("games", "competition_note", "TEXT"),
     ("games", "period", "INTEGER"),
@@ -274,9 +308,32 @@ class SportsDatabase:
     """SQLite 存取層。"""
 
     def __init__(self, db_path: Path | None = None):
-        self.db_path = db_path or (config.DATA_DIR / "sportsbet.db")
+        self.db_path = db_path or self._resolve_db_path()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()
+
+    @staticmethod
+    def _resolve_db_path() -> Path:
+        """本機用 repo data/；Streamlit Cloud 複製至可寫暫存（repo DB 可能唯讀）。"""
+        repo_db = config.DATA_DIR / "sportsbet.db"
+        if os.getenv("STREAMLIT_RUNTIME_ENV") and repo_db.is_file():
+            tmp_dir = Path(os.environ.get("TMPDIR", "/tmp"))
+            tmp_db = tmp_dir / "sports-quant-sportsbet.db"
+            try:
+                if not tmp_db.is_file() or repo_db.stat().st_mtime > tmp_db.stat().st_mtime:
+                    shutil.copy2(repo_db, tmp_db)
+                return tmp_db
+            except OSError as exc:
+                logger.warning("Streamlit 無法複製 DB 至 /tmp，改用 repo 路徑: %s", exc)
+        return repo_db
+
+    @staticmethod
+    def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+            (table,),
+        ).fetchone()
+        return row is not None
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -284,10 +341,23 @@ class SportsDatabase:
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
+    def _apply_schema(self, conn: sqlite3.Connection) -> None:
+        conn.executescript(SCHEMA_SQL)
+        for table, col, typ in _MIGRATION_COLUMNS:
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
+            except sqlite3.OperationalError:
+                pass
+
     @contextmanager
     def connection(self) -> Generator[sqlite3.Connection, None, None]:
         conn = self._connect()
         try:
+            # 相容 Streamlit 快取舊實例：部署新表後 lazy migrate
+            if not self._table_exists(conn, "player_game_stats"):
+                self._apply_schema(conn)
+            if not self._table_exists(conn, "member_consensus"):
+                self._apply_schema(conn)
             yield conn
             conn.commit()
         except Exception:
@@ -297,13 +367,14 @@ class SportsDatabase:
             conn.close()
 
     def _init_schema(self) -> None:
-        with self.connection() as conn:
-            conn.executescript(SCHEMA_SQL)
-            for table, col, typ in _MIGRATION_COLUMNS:
-                try:
-                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
-                except sqlite3.OperationalError:
-                    pass
+        conn = self._connect()
+        try:
+            self._apply_schema(conn)
+            conn.commit()
+        except sqlite3.OperationalError as exc:
+            logger.warning("DB schema 初始化略過（可能唯讀）: %s", exc)
+        finally:
+            conn.close()
 
     def upsert_game(
         self,
@@ -1805,6 +1876,9 @@ class SportsDatabase:
         finals_only: bool = False,
         limit: int = 300,
     ) -> pd.DataFrame:
+        with self.connection() as conn:
+            if not self._table_exists(conn, "player_game_stats"):
+                return pd.DataFrame()
         sql = """
             SELECT g.*
             FROM games g
@@ -1833,22 +1907,46 @@ class SportsDatabase:
         """
         params.append(limit)
         with self.connection() as conn:
-            return pd.read_sql_query(sql, conn, params=params)
+            try:
+                return pd.read_sql_query(sql, conn, params=params)
+            except (pd.errors.DatabaseError, sqlite3.OperationalError) as exc:
+                logger.warning("get_games_missing_box_scores 失敗: %s", exc)
+                return pd.DataFrame()
 
     def get_player_game_stats(self, game_id: int) -> pd.DataFrame:
+        gid = int(game_id)
         with self.connection() as conn:
-            return pd.read_sql_query(
-                "SELECT * FROM player_game_stats WHERE game_id = ? ORDER BY points DESC",
-                conn,
-                params=(game_id,),
-            )
+            if not self._table_exists(conn, "player_game_stats"):
+                return pd.DataFrame()
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM player_game_stats
+                    WHERE game_id = ?
+                    ORDER BY COALESCE(points, 0) DESC
+                    """,
+                    (gid,),
+                ).fetchall()
+            except sqlite3.OperationalError as exc:
+                logger.warning("讀取 player_game_stats game_id=%s 失敗: %s", gid, exc)
+                return pd.DataFrame()
+        if not rows:
+            return pd.DataFrame()
+        return pd.DataFrame([dict(r) for r in rows])
 
     def get_game_quarter_scores(self, game_id: int) -> pd.Series | None:
+        gid = int(game_id)
         with self.connection() as conn:
-            row = conn.execute(
-                "SELECT * FROM game_quarter_scores WHERE game_id = ?",
-                (game_id,),
-            ).fetchone()
+            if not self._table_exists(conn, "game_quarter_scores"):
+                return None
+            try:
+                row = conn.execute(
+                    "SELECT * FROM game_quarter_scores WHERE game_id = ?",
+                    (gid,),
+                ).fetchone()
+            except sqlite3.OperationalError as exc:
+                logger.warning("讀取 game_quarter_scores game_id=%s 失敗: %s", gid, exc)
+                return None
         return pd.Series(dict(row)) if row else None
 
     def get_player_recent_box_scores(
@@ -1884,21 +1982,104 @@ class SportsDatabase:
         limit: int = 5,
     ) -> pd.DataFrame:
         with self.connection() as conn:
-            return pd.read_sql_query(
+            if not self._table_exists(conn, "player_game_stats"):
+                return pd.DataFrame()
+            try:
+                return pd.read_sql_query(
+                    """
+                    SELECT g.*
+                    FROM games g
+                    WHERE g.sport = ?
+                      AND g.match_date < ?
+                      AND g.status IN ('final', 'FT', 'AOT', 'Finished', 'POST')
+                      AND (
+                            (g.home_team = ? AND g.away_team = ?)
+                         OR (g.home_team = ? AND g.away_team = ?)
+                      )
+                      AND EXISTS (SELECT 1 FROM player_game_stats p WHERE p.game_id = g.id)
+                    ORDER BY g.match_date DESC
+                    LIMIT ?
+                    """,
+                    conn,
+                    params=[sport, before_date, team_a, team_b, team_b, team_a, limit],
+                )
+            except (pd.errors.DatabaseError, sqlite3.OperationalError) as exc:
+                logger.warning("get_h2h_games_with_box_scores 失敗: %s", exc)
+                return pd.DataFrame()
+
+    def upsert_member_consensus(self, row: dict[str, Any]) -> None:
+        with self.connection() as conn:
+            conn.execute(
                 """
-                SELECT g.*
-                FROM games g
-                WHERE g.sport = ?
-                  AND g.match_date < ?
-                  AND g.status IN ('final', 'FT', 'AOT', 'Finished', 'POST')
-                  AND (
-                        (g.home_team = ? AND g.away_team = ?)
-                     OR (g.home_team = ? AND g.away_team = ?)
-                  )
-                  AND EXISTS (SELECT 1 FROM player_game_stats p WHERE p.game_id = g.id)
-                ORDER BY g.match_date DESC
-                LIMIT ?
+                INSERT INTO member_consensus (
+                    game_id, sport, match_date, source, member_tier, board,
+                    market, selection, member_pct, sample_size, line, odds,
+                    playsport_game_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(game_id, source, member_tier, board, market, selection)
+                DO UPDATE SET
+                    member_pct=excluded.member_pct,
+                    sample_size=excluded.sample_size,
+                    line=excluded.line,
+                    odds=excluded.odds,
+                    playsport_game_id=excluded.playsport_game_id,
+                    scraped_at=datetime('now')
                 """,
-                conn,
-                params=(sport, before_date, team_a, team_b, team_b, team_a, limit),
+                (
+                    row["game_id"],
+                    row["sport"],
+                    row["match_date"],
+                    row.get("source", "playsport"),
+                    row.get("member_tier", "win60"),
+                    row.get("board", "tw"),
+                    row["market"],
+                    row["selection"],
+                    row.get("member_pct"),
+                    row.get("sample_size"),
+                    row.get("line"),
+                    row.get("odds"),
+                    row.get("playsport_game_id"),
+                ),
             )
+
+    def get_member_consensus_snapshot(
+        self,
+        game_id: int,
+        *,
+        member_tier: str = "win60",
+    ) -> dict[str, Any] | None:
+        """彙總單場玩運彩會員預測（主隊視角）。"""
+        with self.connection() as conn:
+            if not self._table_exists(conn, "member_consensus"):
+                return None
+            rows = conn.execute(
+                """
+                SELECT market, selection, member_pct, sample_size
+                FROM member_consensus
+                WHERE game_id = ? AND member_tier = ? AND board = 'tw'
+                """,
+                (int(game_id), member_tier),
+            ).fetchall()
+        if not rows:
+            return None
+        out: dict[str, Any] = {}
+        for r in rows:
+            m, sel = str(r["market"]), str(r["selection"])
+            pct = float(r["member_pct"]) if r["member_pct"] is not None else None
+            n = int(r["sample_size"]) if r["sample_size"] is not None else None
+            if m == "moneyline" and sel == "home":
+                out["ml_home_pct"] = pct
+                out["sample_ml"] = n
+            elif m == "moneyline" and sel == "away":
+                out["ml_away_pct"] = pct
+            elif m == "spread" and sel == "home":
+                out["spread_home_pct"] = pct
+                out["sample_spread"] = n
+            elif m == "spread" and sel == "away":
+                out["spread_away_pct"] = pct
+            elif m == "total" and sel == "over":
+                out["over_pct"] = pct
+                out["sample_total"] = n
+            elif m == "total" and sel == "under":
+                out["under_pct"] = pct
+        return out if out else None

@@ -48,7 +48,7 @@ def _pct(v: float | None) -> str:
 
 
 # 遞增以在 Streamlit Cloud 部署後清掉舊版 SportsDatabase 快取
-_DB_CACHE_VERSION = 4
+_DB_CACHE_VERSION = 6
 
 
 def _schedule_coverage(db: SportsDatabase, sport: str) -> dict[str, object]:
