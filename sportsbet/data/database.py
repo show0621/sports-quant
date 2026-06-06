@@ -1285,6 +1285,34 @@ class SportsDatabase:
             ).fetchone()
             return str(row["meta_value"]) if row and row["meta_value"] is not None else None
 
+    def get_market_data_fingerprint(self, sport: Sport) -> str:
+        """predictions / forecasts 變更時更新，供 UI 快取失效。"""
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM predictions p
+                     JOIN games g ON g.id = p.game_id WHERE g.sport = ?) AS pred_n,
+                    (SELECT MAX(p.created_at) FROM predictions p
+                     JOIN games g ON g.id = p.game_id WHERE g.sport = ?) AS pred_ts,
+                    (SELECT COUNT(*) FROM game_forecasts f
+                     JOIN games g ON g.id = f.game_id WHERE g.sport = ?) AS fc_n
+                """,
+                (sport, sport, sport),
+            ).fetchone()
+        refreshed = self.get_backtest_sync_meta(sport, "backtest_refreshed_at") or ""
+        db_path = getattr(self, "db_path", None) or ""
+        mtime = ""
+        try:
+            from pathlib import Path
+
+            p = Path(str(db_path)) if db_path else None
+            if p and p.is_file():
+                mtime = str(int(p.stat().st_mtime))
+        except OSError:
+            pass
+        return f"{sport}:{row['pred_n']}:{row['pred_ts']}:{row['fc_n']}:{refreshed}:{mtime}"
+
     def set_backtest_sync_meta(self, sport: Sport, meta_key: str, meta_value: str) -> None:
         with self.connection() as conn:
             conn.execute(

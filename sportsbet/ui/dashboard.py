@@ -93,6 +93,12 @@ def _schedule_coverage(db: SportsDatabase, sport: str) -> dict[str, object]:
     }
 
 
+def _market_data_fingerprint(db: SportsDatabase, sport: str) -> str:
+    if hasattr(db, "get_market_data_fingerprint"):
+        return db.get_market_data_fingerprint(sport)  # type: ignore[attr-defined]
+    return f"{sport}:legacy"
+
+
 def _sync_meta(db: SportsDatabase, sport: str, meta_key: str) -> str | None:
     """讀取 backtest_sync_meta；相容舊版 DB 包裝。"""
     if hasattr(db, "get_backtest_sync_meta"):
@@ -116,6 +122,36 @@ def get_db(_cache_version: int = _DB_CACHE_VERSION) -> SportsDatabase:
 @st.cache_resource
 def get_prediction_service(_cache_version: int = _DB_CACHE_VERSION) -> PredictionService:
     return PredictionService(get_db(_cache_version))
+
+
+@st.cache_data(show_spinner=False)
+def _cached_bankroll_simulation(
+    fingerprint: str,
+    sport: str,
+    market_key: str,
+    allowed_markets: tuple[str, ...],
+    min_ev: float,
+) -> tuple[dict, pd.Series, pd.DataFrame, int]:
+    """從 DB 讀 predictions + 跑 Kelly 模擬；fingerprint 變才重算。"""
+    db = SportsDatabase()
+    df = db.get_backtest_frame(sport)
+    if df.empty:
+        return {"error": "無資料"}, pd.Series([config.INITIAL_BANKROLL]), pd.DataFrame(), 0
+    df = df.dropna(subset=["model_prob", "won", "odds"]).copy()
+    if market_key == "all":
+        df = df[df["market"].isin(allowed_markets)].copy()
+    else:
+        df = df[df["market"] == market_key].copy()
+    if df.empty:
+        return {"error": "無資料"}, pd.Series([config.INITIAL_BANKROLL]), pd.DataFrame(), len(df)
+    df["model_prob"] = df["model_prob"].astype(float).clip(0.0, 1.0)
+    if "ev" not in df.columns or df["ev"].isna().all():
+        risk = RiskManager()
+        df["ev"] = df.apply(
+            lambda r: risk.expected_value(float(r["model_prob"]), float(r["odds"])), axis=1
+        )
+    summary, equity, trades = EvaluationModule(min_ev=min_ev).run_bankroll_simulation(df)
+    return summary, equity, trades, len(df)
 
 
 def _persist_database(message: str | None = None, *, db: SportsDatabase | None = None) -> DbPushResult:
@@ -270,6 +306,7 @@ def page_backtest_review(sport: str) -> None:
             f"歷史覆盤 {stats.get('history', 0)} 場"
         )
         st.cache_resource.clear()
+        st.cache_data.clear()
         st.rerun()
     if full_refresh:
         with st.spinner("同步歷史賽果、傷兵並重算全部覆盤…"):
@@ -281,6 +318,7 @@ def page_backtest_review(sport: str) -> None:
             f"{stats.get('predictions', 0)} 筆投注紀錄"
         )
         st.cache_resource.clear()
+        st.cache_data.clear()
         st.rerun()
 
     review = svc.get_review_table(sport, final_only=True)
@@ -581,19 +619,12 @@ def page_bankroll(sport: str) -> None:
     st.caption(
         f"起始 NT$ {config.INITIAL_BANKROLL/10000:.0f}萬 · "
         f"每場僅下注 EV 最高且 > {config.MIN_EV_THRESHOLD:.0%} 的單一玩法 · "
-        f"凱利 f*×{config.KELLY_FRACTION:g}（上限 {config.MAX_BET_FRACTION:.0%}）· 依日期序"
+        f"凱利 f*×{config.KELLY_FRACTION:g}（上限 {config.MAX_BET_FRACTION:.0%}）· 依日期序 · "
+        f"**預測/賠率已存 DB，重整僅讀庫 + 快取模擬**"
     )
 
     db = get_db()
-    df = db.get_backtest_frame(sport)
-    if df.empty:
-        st.warning("尚無回測資料。")
-        return
-
-    df = df.dropna(subset=["model_prob", "won", "odds"]).copy()
-    if df.empty:
-        st.warning("尚無可回測的預測與賽果。")
-        return
+    fp = _market_data_fingerprint(db, sport)
 
     allowed = config.BANKROLL_MARKETS.get(sport, ("moneyline", "total", "spread"))
     market_opts = {"全部": "all", "勝負": "moneyline", "大小分": "total", "讓分": "spread"}
@@ -601,26 +632,25 @@ def page_bankroll(sport: str) -> None:
         st.info("MLB 勝率模型校準不足，回測預設僅含大小盤；勝負盤可手動篩選檢視。")
     market_label = st.selectbox("盤口篩選", list(market_opts.keys()), index=0)
     market_key = market_opts[market_label]
-    if market_key == "all":
-        df = df[df["market"].isin(allowed)].copy()
-    else:
-        df = df[df["market"] == market_key].copy()
 
-    if df.empty:
-        st.warning(f"「{market_label}」尚無可回測資料。")
+    summary, equity, trades, raw_n = _cached_bankroll_simulation(
+        fp,
+        sport,
+        market_key,
+        tuple(allowed),
+        config.MIN_EV_THRESHOLD,
+    )
+    if summary.get("error") == "無資料" and raw_n == 0:
+        with db.connection() as conn:
+            pred_n = conn.execute(
+                "SELECT COUNT(*) FROM predictions p JOIN games g ON g.id=p.game_id WHERE g.sport=?",
+                (sport,),
+            ).fetchone()[0]
+        if pred_n == 0:
+            st.warning("尚無回測資料。請先執行 watch 或側欄「完整同步」。")
+        else:
+            st.warning(f"「{market_label}」尚無可回測資料（predictions 共 {pred_n} 筆）。")
         return
-
-    df["model_prob"] = df["model_prob"].astype(float).clip(0.0, 1.0)
-
-    if "ev" not in df.columns or df["ev"].isna().all():
-        risk = RiskManager()
-        df["ev"] = df.apply(
-            lambda r: risk.expected_value(float(r["model_prob"]), float(r["odds"])), axis=1
-        )
-
-    evaluator = EvaluationModule(min_ev=config.MIN_EV_THRESHOLD)
-    report = evaluator.run_full_evaluation(df)
-    summary = report.backtest_summary
 
     st.markdown('<div class="bankroll-metrics">', unsafe_allow_html=True)
     c1, c2, c3, c4, c5 = st.columns(5)
@@ -632,15 +662,15 @@ def page_bankroll(sport: str) -> None:
     st.markdown("</div>", unsafe_allow_html=True)
 
     roi = float(summary.get("roi", 0))
-    if roi < 0 and not report.trades.empty:
-        t = report.trades
+    if roi < 0 and not trades.empty:
+        t = trades
         st.warning(
             f"回測虧損（ROI {format_compact_pct(roi, signed=True)}）。"
             f"模型勝率 {t['prob'].mean():.0%} vs 實際 {t['won'].mean():.0%}；"
             f"常見原因：大小分 Poisson 過度自信、或勝率與賽果相關性不足。"
         )
 
-    eq = report.equity_curve.reset_index(drop=True)
+    eq = equity.reset_index(drop=True)
     eq_df = pd.DataFrame({"step": eq.index, "equity": eq.values})
     fig = px.line(eq_df, x="step", y="equity", title="淨值成長曲線 (Equity Curve)")
     fig.add_hline(y=config.INITIAL_BANKROLL, line_dash="dot", annotation_text="起始")
@@ -652,16 +682,16 @@ def page_bankroll(sport: str) -> None:
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    if not report.trades.empty:
+    if not trades.empty:
         st.subheader("交易明細")
         st.caption(
             "每場一筆：該場 EV 最高且為正的唯一玩法 · 倉位依凱利公式 · "
             "含日期、對戰、盤口、賠率、投注與損益。"
         )
-        detail = format_bankroll_trades(report.trades, sport)
+        detail = format_bankroll_trades(trades, sport)
         st.dataframe(detail, use_container_width=True, hide_index=True)
-        wins = int(report.trades["won"].sum()) if "won" in report.trades.columns else 0
-        total = len(report.trades)
+        wins = int(trades["won"].sum()) if "won" in trades.columns else 0
+        total = len(trades)
         st.caption(f"命中 {wins}/{total}（{wins/total:.1%}）" if total else "")
 
 
@@ -724,6 +754,7 @@ def main() -> None:
             st.session_state["last_api_error"] = ""
             st.sidebar.success("完整同步完成")
             st.cache_resource.clear()
+            st.cache_data.clear()
             st.rerun()
         except Exception as exc:
             _show_sidebar_api_error(exc)

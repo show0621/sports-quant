@@ -94,3 +94,27 @@ class EvaluationModule:
             equity_curve=bt.equity_curve,
             trades=bt.trades,
         )
+
+    def run_bankroll_simulation(
+        self,
+        df: pd.DataFrame,
+        *,
+        prob_col: str = "model_prob",
+        outcome_col: str = "won",
+        odds_col: str = "odds",
+        date_col: str = "match_date",
+        ev_col: str | None = "ev",
+    ) -> tuple[dict, pd.Series, pd.DataFrame]:
+        """僅 Kelly 資金模擬（不跑校準/Brier），供看板快取。"""
+        d = df.dropna(subset=[prob_col, outcome_col, odds_col]).copy()
+        if d.empty:
+            return {"error": "資料不足"}, pd.Series([config.INITIAL_BANKROLL]), pd.DataFrame()
+        bt = self.backtest.run(
+            d,
+            date_col=date_col if date_col in d.columns else "match_date",
+            prob_col=prob_col,
+            odds_col=odds_col,
+            won_col=outcome_col,
+            ev_col=ev_col,
+        )
+        return bt.summary, bt.equity_curve, bt.trades
