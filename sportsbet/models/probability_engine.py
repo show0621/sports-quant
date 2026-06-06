@@ -110,27 +110,74 @@ def ensemble_matchup_probability(
     home_recent_win_pct: float | None = None,
     away_recent_win_pct: float | None = None,
     db: SportsDatabase | None = None,
+    season_type: str | None = None,
+    competition_note: str | None = None,
 ) -> ProbabilityBreakdown:
     """計算集成勝率及分解。"""
+    from sportsbet.data.h2h_recent import (
+        get_h2h_recent_for_matchup,
+        is_playoff_series,
+        playoff_ensemble_weights,
+        resolve_matchup_recent_form,
+    )
+
     home_pyth = engine.team_win_pct(home_rs, home_ra, home_games)
     away_pyth = engine.team_win_pct(away_rs, away_ra, away_games)
     h_season = home_season_win_pct if home_season_win_pct is not None else home_pyth
     a_season = away_season_win_pct if away_season_win_pct is not None else away_pyth
-    h_recent = home_recent_win_pct if home_recent_win_pct is not None else h_season
-    a_recent = away_recent_win_pct if away_recent_win_pct is not None else a_season
+    team_h_recent = home_recent_win_pct if home_recent_win_pct is not None else h_season
+    team_a_recent = away_recent_win_pct if away_recent_win_pct is not None else a_season
+
+    playoff = is_playoff_series(season_type, competition_note)
+    h2h_n = 0
+    h2h_h = h2h_a = None
+    if db is not None and playoff:
+        h_recent, a_recent, _, _, h2h_n = resolve_matchup_recent_form(
+            db,
+            sport,
+            home_team,
+            away_team,
+            match_date,
+            team_h_recent,
+            team_a_recent,
+            playoff=True,
+        )
+        if h2h_n >= 1:
+            h2h_h, h2h_a = get_h2h_recent_for_matchup(
+                db, sport, home_team, away_team, match_date,
+            )
+    else:
+        h_recent, a_recent = team_h_recent, team_a_recent
+
+    recent_w = (
+        config.PLAYOFF_H2H_BAYES_RECENT_WEIGHT
+        if h2h_n >= 1 and config.PLAYOFF_USE_H2H_RECENT
+        else None
+    )
 
     log5_h, log5_a = analytics.matchup_win_prob(home_pyth, away_pyth, engine.home_advantage)
 
     bayes_h = engine.bayesian_posterior(
-        log5_h, is_home=True, recent_win_pct=h_recent, season_win_pct=home_pyth,
+        log5_h,
+        is_home=True,
+        recent_win_pct=h_recent,
+        season_win_pct=home_pyth,
+        recent_weight=recent_w,
     )
     bayes_a = engine.bayesian_posterior(
-        log5_a, recent_win_pct=a_recent, season_win_pct=away_pyth,
+        log5_a,
+        recent_win_pct=a_recent,
+        season_win_pct=away_pyth,
+        recent_weight=recent_w,
     )
 
-    n_recent = config.BAYES_RECENT_GAMES
-    beta_h = beta_binomial_win_pct(h_recent * n_recent, n_recent, home_pyth)
-    beta_a = beta_binomial_win_pct(a_recent * n_recent, n_recent, away_pyth)
+    if h2h_h is not None and h2h_h.games >= 1:
+        beta_h = beta_binomial_win_pct(float(h2h_h.wins), h2h_h.games, home_pyth)
+        beta_a = beta_binomial_win_pct(float(h2h_a.wins), h2h_a.games, away_pyth)
+    else:
+        n_recent = config.BAYES_RECENT_GAMES
+        beta_h = beta_binomial_win_pct(h_recent * n_recent, n_recent, home_pyth)
+        beta_a = beta_binomial_win_pct(a_recent * n_recent, n_recent, away_pyth)
 
     ctx = None
     markov_h, markov_a = log5_h, log5_a
@@ -141,12 +188,12 @@ def ensemble_matchup_probability(
         markov_h, markov_a = markov_matchup_win_prob(ctx, sport)
         ctx_lr_h = _context_likelihood_ratio(ctx, is_home=True)
         ctx_lr_a = _context_likelihood_ratio(ctx, is_home=False)
+        if h2h_n >= 1 and ctx.h2h_home_win_pct is not None:
+            extra = 1.0 + (ctx.h2h_home_win_pct - 0.5) * config.PLAYOFF_CONTEXT_H2H_EXTRA
+            ctx_lr_h = max(0.7, min(1.35, ctx_lr_h * extra))
+            ctx_lr_a = max(0.7, min(1.35, ctx_lr_a / extra if extra > 0 else ctx_lr_a))
 
-    # 加權集成（歸一化前）
-    w_log5 = config.WEIGHT_LOG5
-    w_bayes = config.WEIGHT_BAYESIAN
-    w_beta = config.WEIGHT_BETA
-    w_markov = config.WEIGHT_MARKOV if config.USE_MARKOV_FORM else 0.0
+    w_log5, w_bayes, w_beta, w_markov = playoff_ensemble_weights(h2h_n)
     w_sum = w_log5 + w_bayes + w_beta + w_markov
     if w_sum <= 0:
         w_sum = 1.0

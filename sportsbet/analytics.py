@@ -147,6 +147,7 @@ def apply_bayesian_adjustments(
     season_win_pct: float | None = None,
     key_player_out: bool = False,
     custom_likelihood: float = 1.0,
+    recent_weight: float | None = None,
 ) -> float:
     """
     將畢達哥拉斯先驗更新為後驗勝率。
@@ -162,8 +163,7 @@ def apply_bayesian_adjustments(
 
     if recent_win_pct is not None and season_win_pct is not None:
         form_lr = recent_form_likelihood(recent_win_pct, season_win_pct)
-        # 線性混合：越高的 BAYES_RECENT_WEIGHT 越信任近況
-        w = config.BAYES_RECENT_WEIGHT
+        w = recent_weight if recent_weight is not None else config.BAYES_RECENT_WEIGHT
         lr *= (1.0 - w) + w * form_lr
 
     if key_player_out:

@@ -114,6 +114,8 @@ def _rebuild_prob_breakdown(fc: Any) -> Any | None:
             home_recent_win_pct=home.recent_win_pct,
             away_recent_win_pct=away.recent_win_pct,
             db=db,
+            season_type=getattr(fc, "season_type", None),
+            competition_note=getattr(fc, "competition_note", None),
         )
     except Exception:
         return None
@@ -159,7 +161,11 @@ def build_pipeline_from_forecast(fc: Any) -> BayesianForecastPipeline:
         PipelineStage(
             "recent", "③ 近況勝率", "似然（近期樣本）",
             home.recent_win_pct, away.recent_win_pct,
-            f"近 {config.BAYES_RECENT_GAMES} 場",
+            (
+                f"對同對手近 {getattr(fc, 'h2h_recent_games', 0)} 場（系列賽）"
+                if getattr(fc, "h2h_recent_games", 0)
+                else f"近 {config.BAYES_RECENT_GAMES} 場"
+            ),
         ),
         PipelineStage(
             "log5", "④ Log5 對戰先驗", "先驗（對戰調整）",

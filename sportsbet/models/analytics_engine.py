@@ -54,6 +54,7 @@ class AnalyticsEngine:
         recent_win_pct: float | None = None,
         season_win_pct: float | None = None,
         key_player_out: bool = False,
+        recent_weight: float | None = None,
     ) -> float:
         return analytics.apply_bayesian_adjustments(
             prior,
@@ -61,6 +62,7 @@ class AnalyticsEngine:
             recent_win_pct=recent_win_pct,
             season_win_pct=season_win_pct,
             key_player_out=key_player_out,
+            recent_weight=recent_weight,
         )
 
     def predict_matchup(

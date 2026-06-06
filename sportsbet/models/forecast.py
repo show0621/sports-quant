@@ -65,6 +65,7 @@ class GameForecast:
     away_missing: list[dict[str, Any]] | None = None
     season_type: str | None = None
     competition_note: str | None = None
+    h2h_recent_games: int | None = None
     sim_result: Any | None = None  # MonteCarloResult when enabled
     prob_breakdown: Any | None = None  # ProbabilityBreakdown from ensemble engine
     pipeline: Any | None = None  # BayesianForecastPipeline
@@ -264,6 +265,22 @@ def build_game_forecast(
     a_season = away_season_win_pct if away_season_win_pct is not None else away_pyth
     h_recent = home_recent_win_pct if home_recent_win_pct is not None else h_season
     a_recent = away_recent_win_pct if away_recent_win_pct is not None else a_season
+    h2h_recent_games = 0
+
+    from sportsbet.data.h2h_recent import is_playoff_series, resolve_matchup_recent_form
+
+    _playoff = is_playoff_series(season_type, competition_note)
+    if db is not None and _playoff:
+        h_recent, a_recent, _, _, h2h_recent_games = resolve_matchup_recent_form(
+            db,
+            sport,
+            home_team,
+            away_team,
+            match_date,
+            h_recent,
+            a_recent,
+            playoff=True,
+        )
 
     log5_home, log5_away = analytics.matchup_win_prob(home_pyth, away_pyth, engine.home_advantage)
 
@@ -288,6 +305,8 @@ def build_game_forecast(
             home_recent_win_pct=home_recent_win_pct,
             away_recent_win_pct=away_recent_win_pct,
             db=db,
+            season_type=season_type,
+            competition_note=competition_note,
         )
         bayes_home = prob_breakdown.bayesian_home
         bayes_away = prob_breakdown.bayesian_away
@@ -299,11 +318,21 @@ def build_game_forecast(
             is_home=True,
             recent_win_pct=h_recent,
             season_win_pct=home_pyth,
+            recent_weight=(
+                config.PLAYOFF_H2H_BAYES_RECENT_WEIGHT
+                if h2h_recent_games >= 1 and config.PLAYOFF_USE_H2H_RECENT
+                else None
+            ),
         )
         bayes_away = engine.bayesian_posterior(
             log5_away,
             recent_win_pct=a_recent,
             season_win_pct=away_pyth,
+            recent_weight=(
+                config.PLAYOFF_H2H_BAYES_RECENT_WEIGHT
+                if h2h_recent_games >= 1 and config.PLAYOFF_USE_H2H_RECENT
+                else None
+            ),
         )
         total = bayes_home + bayes_away
         home_prob_base = bayes_home / total
@@ -505,6 +534,7 @@ def build_game_forecast(
         away_missing=away_miss or None,
         season_type=season_type,
         competition_note=competition_note,
+        h2h_recent_games=h2h_recent_games or None,
         sim_result=sim_result,
         prob_breakdown=prob_breakdown,
     )
@@ -610,10 +640,19 @@ def team_rating_panel_rows(fc: GameForecast) -> list[tuple[str, str, str, bool]]
         ("戰績 W-L", format_wl_record(away.games, away.season_win_pct),
          format_wl_record(home.games, home.season_win_pct), False),
         ("賽季勝率", _fmt_pct(away.season_win_pct), _fmt_pct(home.season_win_pct), False),
-        ("近況勝率", _fmt_pct(away.recent_win_pct), _fmt_pct(home.recent_win_pct), False),
+    ]
+    recent_label = (
+        f"近況（對手 H2H·{fc.h2h_recent_games}）"
+        if fc.h2h_recent_games and fc.h2h_recent_games >= 1
+        else "近況勝率"
+    )
+    rows.append(
+        (recent_label, _fmt_pct(away.recent_win_pct), _fmt_pct(home.recent_win_pct), False),
+    )
+    rows.extend([
         ("畢氏勝率", _fmt_pct(away.pythagorean_win_pct), _fmt_pct(home.pythagorean_win_pct), False),
         ("Log5 對戰", _fmt_pct(away.log5_matchup_win_pct), _fmt_pct(home.log5_matchup_win_pct), False),
-    ]
+    ])
 
     for key, label in (
         ("beta", "Beta-Binomial"),
