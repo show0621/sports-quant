@@ -47,14 +47,18 @@ def _pct(v: float | None) -> str:
     return f"{float(v) * 100:.1f}%"
 
 
+# 遞增以在 Streamlit Cloud 部署後清掉舊版 SportsDatabase 快取
+_DB_CACHE_VERSION = 3
+
+
 @st.cache_resource
-def get_db() -> SportsDatabase:
+def get_db(_cache_version: int = _DB_CACHE_VERSION) -> SportsDatabase:
     return SportsDatabase()
 
 
 @st.cache_resource
-def get_prediction_service() -> PredictionService:
-    return PredictionService(get_db())
+def get_prediction_service(_cache_version: int = _DB_CACHE_VERSION) -> PredictionService:
+    return PredictionService(get_db(_cache_version))
 
 
 def _persist_database(message: str | None = None) -> None:

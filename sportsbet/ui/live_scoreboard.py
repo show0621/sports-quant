@@ -62,6 +62,46 @@ def _fetch_today_games(db: SportsDatabase, sport: str) -> pd.DataFrame:
     ]
 
 
+def _get_game_forecast_row(
+    db: SportsDatabase,
+    sport: str,
+    gid: int,
+    match_date: str,
+) -> pd.Series | None:
+    """讀取單場 forecast；相容舊版 DB / 快取中的 SportsDatabase 實例。"""
+    if hasattr(db, "get_game_forecast_row"):
+        return db.get_game_forecast_row(gid)  # type: ignore[attr-defined]
+
+    if hasattr(db, "get_forecasts_by_date"):
+        df = db.get_forecasts_by_date(sport, str(match_date)[:10])  # type: ignore[arg-type]
+        if not df.empty and "game_id" in df.columns:
+            hit = df[df["game_id"] == gid]
+            if not hit.empty:
+                return hit.iloc[0]
+
+    try:
+        with db.connection() as conn:
+            df = pd.read_sql_query(
+                "SELECT * FROM game_forecasts WHERE game_id = ?",
+                conn,
+                params=(gid,),
+            )
+        if not df.empty:
+            return df.iloc[0]
+    except Exception:
+        pass
+    return None
+
+
+def _get_total_line(db: SportsDatabase, gid: int) -> float | None:
+    if hasattr(db, "get_market_line"):
+        return db.get_market_line(gid, "total")  # type: ignore[attr-defined]
+    line = summarize_game_odds(db, gid).get("total_line")
+    if line is None or (isinstance(line, float) and pd.isna(line)):
+        return None
+    return float(line)
+
+
 def _load_forecast(
     db: SportsDatabase,
     sport: str,
@@ -69,7 +109,8 @@ def _load_forecast(
     svc: PredictionService | None,
 ) -> dict[str, Any] | None:
     gid = int(g["id"])
-    row = db.get_game_forecast_row(gid)
+    match_date = str(g.get("match_date", ""))[:10]
+    row = _get_game_forecast_row(db, sport, gid, match_date)
     if row is not None and pd.notna(row.get("predicted_winner")):
         return row.to_dict()
 
@@ -79,7 +120,7 @@ def _load_forecast(
     ht, at = g["home_team"], g["away_team"]
     if ht not in stats.index or at not in stats.index:
         return None
-    line = db.get_market_line(gid, "total")
+    line = _get_total_line(db, gid)
     fc = svc.forecast_game_row(sport, g, stats, total_line=line)
     if not fc:
         return None
