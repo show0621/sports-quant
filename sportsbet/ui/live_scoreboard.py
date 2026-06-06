@@ -179,7 +179,7 @@ def _render_prediction_strip(
     ph, pa = fc.get("predicted_home_score"), fc.get("predicted_away_score")
     score_sub = ""
     if ph is not None and pa is not None and not pd.isna(ph) and not pd.isna(pa):
-        score_sub = f"預估比分 {int(ph)}–{int(pa)}"
+        score_sub = f"預估比分 {int(pa)}–{int(ph)}"
 
     margin = fc.get("predicted_margin")
     margin_hint = ""
@@ -276,7 +276,8 @@ def render_live_scoreboard(
         )
         hs = g.get("home_score")
         as_ = g.get("away_score")
-        score_txt = f"{int(hs)} – {int(as_)}" if pd.notna(hs) and pd.notna(as_) else "VS"
+        # 版面左客右主，比分依慣例為客–主
+        score_txt = f"{int(as_)} – {int(hs)}" if pd.notna(hs) and pd.notna(as_) else "VS"
 
         if is_live:
             period = g.get("period")

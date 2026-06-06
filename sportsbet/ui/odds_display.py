@@ -277,7 +277,7 @@ def actual_result_line(
         side = "客勝"
     else:
         side = "平手"
-    return f"實際 {hs}–{aws}（{side}）"
+    return f"實際 {aws}–{hs}（{side}）"
 
 
 def _result_tag(pick: MarketPickView | None) -> str:
