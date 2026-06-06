@@ -144,7 +144,11 @@ def rebuild_predictions_from_forecasts(
     replace_all: bool = False,
 ) -> int:
     """依 game_forecasts 重建 predictions（含機率校準，供模型健康度/資金回測）。"""
-    from sportsbet.models.calibration import calibrate_total_prob, calibrate_win_prob
+    from sportsbet.models.calibration import (
+        calibrate_spread_prob,
+        calibrate_total_prob,
+        calibrate_win_prob,
+    )
 
     game_filter = ""
     params: list = [sport]
@@ -159,6 +163,7 @@ def rebuild_predictions_from_forecasts(
             SELECT g.id AS game_id, g.sport, g.match_date,
                    f.home_win_prob, f.away_win_prob,
                    f.prob_over, f.predicted_total, f.total_line,
+                   f.predicted_margin,
                    o.market, o.selection, o.odds, o.handicap
             FROM games g
             JOIN game_forecasts f ON f.game_id = g.id
@@ -210,6 +215,25 @@ def rebuild_predictions_from_forecasts(
                     poisson_prob=float(row["prob_over"]),
                 )
                 prob = prob_o if sel == "over" else 1.0 - prob_o
+            elif market == "spread":
+                margin = row["predicted_margin"]
+                line = row["handicap"]
+                pred_total = row["predicted_total"]
+                if margin is None or line is None:
+                    continue
+                from sportsbet.models.totals import prob_away_covers_spread, prob_home_covers_spread
+
+                if sel == "home":
+                    raw = prob_home_covers_spread(
+                        float(line), float(margin), sport=row_sport,
+                        pred_total=float(pred_total) if pred_total is not None else None,
+                    )
+                else:
+                    raw = prob_away_covers_spread(
+                        float(line), float(margin), sport=row_sport,
+                        pred_total=float(pred_total) if pred_total is not None else None,
+                    )
+                prob = calibrate_spread_prob(raw, row_sport)  # type: ignore[arg-type]
             else:
                 continue
             prob = max(0.001, min(0.999, prob))

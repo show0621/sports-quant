@@ -180,6 +180,6 @@ def data_quality_detail(db: SportsDatabase, sport: Sport) -> dict[str, dict[str,
         },
         "player_rolling": {
             "ok": has_real_player_stats(db, sport),
-            "detail": "≥5 人滾動統計" if has_real_player_stats(db, sport) else "需球員 API 同步",
+            "detail": "≥5 人滾動統計" if has_real_player_stats(db, sport) else "執行完整同步（ESPN 爬取）",
         },
     }

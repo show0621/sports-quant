@@ -53,6 +53,31 @@ def inject_dashboard_theme() -> None:
             letter-spacing: 0.06em;
         }
         .sq-masthead-brand span { color: var(--sq-brand); }
+        .sq-quarter-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.88rem;
+            margin: 0.5rem 0 1rem;
+        }
+        .sq-quarter-table th, .sq-quarter-table td {
+            border: 1px solid var(--sq-border);
+            padding: 0.35rem 0.5rem;
+            text-align: center;
+        }
+        .sq-quarter-table th:first-child, .sq-quarter-table td:first-child {
+            text-align: left;
+        }
+        .sq-game-center-header {
+            background: var(--sq-surface);
+            border: 1px solid var(--sq-border);
+            border-radius: 12px;
+            padding: 1rem 1.2rem;
+            margin-bottom: 1rem;
+            box-shadow: var(--sq-shadow);
+        }
+        .sq-gc-score { font-size: 2rem; font-weight: 700; text-align: center; }
+        .sq-gc-matchup { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+        .sq-gc-meta { color: var(--sq-muted); font-size: 0.85rem; margin-bottom: 0.5rem; }
         .sq-masthead-sub {
             margin-top: 0.35rem;
             color: var(--sq-muted);

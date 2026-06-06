@@ -167,6 +167,10 @@ TOTAL_PROB_SHRINK: dict[str, float] = {
     "mlb": float(os.getenv("TOTAL_PROB_SHRINK_MLB", "0.38")),
 }
 TOTAL_MARKET_BLEND = float(os.getenv("TOTAL_MARKET_BLEND", "0.40"))
+SPREAD_PROB_SHRINK: dict[str, float] = {
+    "nba": float(os.getenv("SPREAD_PROB_SHRINK_NBA", "0.55")),
+    "mlb": float(os.getenv("SPREAD_PROB_SHRINK_MLB", "0.45")),
+}
 ML_PROB_SHRINK: dict[str, float] = {
     "nba": float(os.getenv("ML_PROB_SHRINK_NBA", "0.82")),
     "mlb": float(os.getenv("ML_PROB_SHRINK_MLB", "0.35")),

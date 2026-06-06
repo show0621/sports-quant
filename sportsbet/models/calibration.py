@@ -80,3 +80,9 @@ def calibrate_win_prob(prob: float, sport: Sport) -> float:
     """勝負機率收縮，降低集成模型在極端區間的過度自信。"""
     shrink = config.ML_PROB_SHRINK.get(sport, 0.80)
     return max(0.05, min(0.95, shrink_prob(prob, shrink)))
+
+
+def calibrate_spread_prob(prob: float, sport: Sport) -> float:
+    """讓分機率收縮（與大小分類似，避免常態近似過度自信）。"""
+    shrink = config.SPREAD_PROB_SHRINK.get(sport, 0.55)
+    return max(0.05, min(0.95, shrink_prob(prob, shrink)))

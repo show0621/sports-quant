@@ -748,6 +748,12 @@ def main() -> None:
         ["即時賽況", "賽事預測", "歷史覆盤", "球員熱區", "投注訊號", "模型健康", "資金回測"]
     )
     with tab0:
+        detail_id = st.session_state.get("game_detail_id")
+        if detail_id:
+            from sportsbet.ui.game_center_page import render_game_center
+
+            render_game_center(get_db(), sport, int(detail_id), on_close="game_detail_id")
+            st.divider()
         render_live_scoreboard(get_db(), sport, get_prediction_service())
         st.divider()
         page_live_monitor(get_db(), sport, get_prediction_service())

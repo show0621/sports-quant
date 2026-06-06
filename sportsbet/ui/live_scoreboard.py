@@ -308,4 +308,7 @@ def render_live_scoreboard(
             st.caption("主場")
 
         _render_prediction_strip(db, sport, g, fc, status=status)
+        if st.button("賽事詳情", key=f"gc_open_{int(g['id'])}", use_container_width=False):
+            st.session_state["game_detail_id"] = int(g["id"])
+            st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
