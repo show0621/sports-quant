@@ -197,9 +197,9 @@ def page_current_future_predictions(sport: str, svc: PredictionService) -> None:
 
     st.header("賽事預測（現在 / 未來）")
     st.caption(
-        "以台灣時間顯示 · 今日儀表板含進行中、未開賽與已完賽 · "
-        "中英文隊名並列 · 盤口：大小分、讓分、勝負賠率 · "
-        "預測納入歷史/畢氏/近況/馬可夫/H2H/傷兵/球員 box score → 貝氏集成 PK 勝率"
+        "以台灣時間顯示 · 賽程與預測自 DB 讀取（重整不重算）· "
+        "按「重新計算」或「同步賽程」才更新 · "
+        "中英文隊名 · 盤口：大小分、讓分、勝負 · 貝氏集成 PK 勝率"
     )
     with st.expander("貝氏集成 PK 模型方法論", expanded=False):
         render_methodology_overview()
@@ -240,7 +240,7 @@ def page_current_future_predictions(sport: str, svc: PredictionService) -> None:
         st.success("已更新預測紀錄")
         st.rerun()
 
-    forecasts = [f for f in svc.run_upcoming(sport, days_ahead=days_ahead) if isinstance(f, GameForecast)]
+    forecasts = svc.load_stored_upcoming(sport, days_ahead=days_ahead)
     today = date.today().isoformat()
 
     if not forecasts:
@@ -254,7 +254,10 @@ def page_current_future_predictions(sport: str, svc: PredictionService) -> None:
         st.warning("尚無模型預測輸出。")
         if not raw.empty or not live_today.empty:
             show = live_today if not live_today.empty else raw
-            st.info(f"資料庫有 {len(show)} 場賽程，但缺少球隊統計或隊名對應。請按側欄「完整同步」。")
+            st.info(
+                f"資料庫有 {len(show)} 場賽程，但尚無已儲存預測。"
+                "請按「重新計算並儲存預測」或側欄「完整同步」。"
+            )
             cols = [c for c in ["match_date", "home_team", "away_team", "status", "season_type", "competition_note"] if c in show.columns]
             st.dataframe(show[cols], use_container_width=True, hide_index=True)
         else:

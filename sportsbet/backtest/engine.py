@@ -74,6 +74,16 @@ class BacktestEngine:
         bankroll = self.bankroll0
         equity = [bankroll]
         trade_rows = []
+        trade_no = 0
+
+        pass_cols = [
+            c for c in (
+                "game_id", "match_date", "home_team", "away_team",
+                "home_score", "away_score", "market", "selection",
+                "handicap", "model_prob", "ev", "stake_fraction",
+            )
+            if c in df.columns
+        ]
 
         # 單場：逐筆
         singles = df[df.get(parlay_col, 1) == 1] if parlay_col in df.columns else df
@@ -85,32 +95,36 @@ class BacktestEngine:
             won = int(row.get(won_col, 0))
 
             if ev <= self.min_ev:
-                equity.append(bankroll)
                 continue
 
             stake_frac = analytics.adjusted_kelly(prob, odds, self.kelly_fraction)
             stake = bankroll * stake_frac
             if stake <= 0:
-                equity.append(bankroll)
                 continue
 
+            bankroll_before = bankroll
             pnl = stake * (odds - 1) if won else -stake
             bankroll += pnl
             equity.append(bankroll)
-            trade_rows.append(
-                {
-                    "idx": idx,
-                    "date": row.get(date_col),
-                    "prob": prob,
-                    "odds": odds,
-                    "ev": ev,
-                    "stake": stake,
-                    "won": won,
-                    "pnl": pnl,
-                    "bankroll": bankroll,
-                    "type": "single",
-                }
-            )
+            trade_no += 1
+            trade_row: dict = {
+                "trade_no": trade_no,
+                "idx": idx,
+                "date": row.get(date_col),
+                "prob": prob,
+                "odds": odds,
+                "ev": ev,
+                "stake_frac": stake_frac,
+                "stake": stake,
+                "won": won,
+                "pnl": pnl,
+                "bankroll_before": bankroll_before,
+                "bankroll": bankroll,
+                "type": "single",
+            }
+            for col in pass_cols:
+                trade_row[col] = row.get(col)
+            trade_rows.append(trade_row)
 
         trades = pd.DataFrame(trade_rows)
         summary = self._summarize(trades, equity)

@@ -1234,7 +1234,7 @@ class SportsDatabase:
                 SELECT g.id AS game_id, g.match_date, g.home_team, g.away_team,
                        g.home_score, g.away_score,
                        o.market, o.selection, o.handicap, o.odds,
-                       p.model_prob,
+                       p.model_prob, p.ev, p.stake_fraction,
                        CASE
                            WHEN o.market = 'moneyline' AND o.selection = 'home'
                                THEN CASE WHEN g.home_score > g.away_score THEN 1 ELSE 0 END
@@ -1244,6 +1244,10 @@ class SportsDatabase:
                                THEN CASE WHEN (g.home_score + g.away_score) > o.handicap THEN 1 ELSE 0 END
                            WHEN o.market = 'total' AND o.selection = 'under'
                                THEN CASE WHEN (g.home_score + g.away_score) < o.handicap THEN 1 ELSE 0 END
+                           WHEN o.market = 'spread' AND o.selection = 'home'
+                               THEN CASE WHEN (g.home_score + o.handicap) > g.away_score THEN 1 ELSE 0 END
+                           WHEN o.market = 'spread' AND o.selection = 'away'
+                               THEN CASE WHEN (g.away_score + o.handicap) > g.home_score THEN 1 ELSE 0 END
                            ELSE NULL
                        END AS won
                 FROM games g
@@ -1535,6 +1539,21 @@ class SportsDatabase:
         if df.empty:
             return None
         return df.iloc[0]
+
+    def get_game_forecasts_for_ids(self, game_ids: list[int]) -> dict[int, pd.Series]:
+        """批次讀取 game_forecasts（game_id → row）。"""
+        if not game_ids:
+            return {}
+        placeholders = ",".join("?" for _ in game_ids)
+        with self.connection() as conn:
+            df = pd.read_sql_query(
+                f"SELECT * FROM game_forecasts WHERE game_id IN ({placeholders})",
+                conn,
+                params=tuple(game_ids),
+            )
+        if df.empty:
+            return {}
+        return {int(r["game_id"]): r for _, r in df.iterrows()}
 
     def get_team_player_stats(self, sport: Sport, team: str) -> pd.DataFrame:
         with self.connection() as conn:

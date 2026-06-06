@@ -120,6 +120,79 @@ class GameForecast:
         return row
 
 
+def _float_or(v: object, default: float = 0.0) -> float:
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return default
+    return float(v)
+
+
+def game_forecast_from_db_row(row: pd.Series, game: pd.Series | None = None) -> GameForecast:
+    """由 game_forecasts 資料列還原 GameForecast（不重算模型）。"""
+    g = game if game is not None else row
+    home_team = str(row.get("home_team") or g.get("home_team", ""))
+    away_team = str(row.get("away_team") or g.get("away_team", ""))
+    sport = str(row.get("sport") or g.get("sport", "nba"))
+
+    def _side(prefix: str, team: str) -> TeamForecastDetail:
+        return TeamForecastDetail(
+            team=team,
+            rs_per_game=_float_or(row.get(f"{prefix}_rs")),
+            ra_per_game=_float_or(row.get(f"{prefix}_ra")),
+            games=0,
+            pythagorean_win_pct=_float_or(row.get(f"{prefix}_pyth")),
+            season_win_pct=_float_or(row.get(f"{prefix}_season_win_pct")),
+            recent_win_pct=_float_or(row.get(f"{prefix}_recent_win_pct")),
+            log5_matchup_win_pct=_float_or(row.get(f"{prefix}_log5_win_pct")),
+            bayesian_win_pct=_float_or(row.get(f"{prefix}_bayesian_win_pct")),
+        )
+
+    pick = row.get("pick_correct")
+    pick_correct = bool(int(pick)) if pick is not None and pd.notna(pick) else None
+    ah = row.get("actual_home_score")
+    aa = row.get("actual_away_score")
+
+    return GameForecast(
+        sport=sport,
+        match_date=str(row.get("match_date") or g.get("match_date", ""))[:10],
+        home_team=home_team,
+        away_team=away_team,
+        home=_side("home", home_team),
+        away=_side("away", away_team),
+        home_win_prob=_float_or(row.get("home_win_prob"), 0.5),
+        away_win_prob=_float_or(row.get("away_win_prob"), 0.5),
+        predicted_winner=str(row.get("predicted_winner") or ""),
+        predicted_home_score=_float_or(row.get("predicted_home_score")),
+        predicted_away_score=_float_or(row.get("predicted_away_score")),
+        predicted_total=_float_or(row.get("predicted_total")),
+        predicted_margin=_float_or(row.get("predicted_margin")),
+        total_line=float(row["total_line"]) if pd.notna(row.get("total_line")) else None,
+        prob_over=float(row["prob_over"]) if pd.notna(row.get("prob_over")) else None,
+        prob_under=float(row["prob_under"]) if pd.notna(row.get("prob_under")) else None,
+        margin_note=str(row.get("margin_note") or ""),
+        home_win_prob_base=float(row["home_win_prob_base"]) if pd.notna(row.get("home_win_prob_base")) else None,
+        away_win_prob_base=float(row["away_win_prob_base"]) if pd.notna(row.get("away_win_prob_base")) else None,
+        home_injury_adj=float(row["home_injury_adj"]) if pd.notna(row.get("home_injury_adj")) else None,
+        away_injury_adj=float(row["away_injury_adj"]) if pd.notna(row.get("away_injury_adj")) else None,
+        match_datetime=str(g["match_datetime"]) if g is not None and pd.notna(g.get("match_datetime")) else None,
+        home_logo_url=str(g["home_logo_url"]) if g is not None and pd.notna(g.get("home_logo_url")) else None,
+        away_logo_url=str(g["away_logo_url"]) if g is not None and pd.notna(g.get("away_logo_url")) else None,
+        game_id=int(row["game_id"]) if pd.notna(row.get("game_id")) else None,
+        status=str(row.get("status") or g.get("status") or "scheduled"),
+        actual_winner=str(row["actual_winner"]) if pd.notna(row.get("actual_winner")) else None,
+        actual_home_score=int(ah) if pd.notna(ah) else None,
+        actual_away_score=int(aa) if pd.notna(aa) else None,
+        pick_correct=pick_correct,
+        margin_error=float(row["margin_error"]) if pd.notna(row.get("margin_error")) else None,
+        total_error=float(row["total_error"]) if pd.notna(row.get("total_error")) else None,
+        home_adjusted_rating=float(row["home_adjusted_rating"]) if pd.notna(row.get("home_adjusted_rating")) else None,
+        away_adjusted_rating=float(row["away_adjusted_rating"]) if pd.notna(row.get("away_adjusted_rating")) else None,
+        home_injury_penalty=float(row["home_injury_penalty"]) if pd.notna(row.get("home_injury_penalty")) else None,
+        away_injury_penalty=float(row["away_injury_penalty"]) if pd.notna(row.get("away_injury_penalty")) else None,
+        season_type=str(g["season_type"]) if g is not None and pd.notna(g.get("season_type")) else None,
+        competition_note=str(g["competition_note"]) if g is not None and pd.notna(g.get("competition_note")) else None,
+    )
+
+
 def forecast_event_label(fc: GameForecast | object) -> str:
     """賽事性質標籤（季後賽 / 總冠軍賽等）；相容舊版物件缺欄位。"""
     note = getattr(fc, "competition_note", None) or getattr(fc, "season_type", None) or ""

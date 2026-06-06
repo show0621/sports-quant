@@ -174,7 +174,7 @@ class PredictionService:
             persist_team_stats(self.db, sport, stats, season=calendar_season(sport))
 
     def ensure_schedule_sync(self, sport: Sport, *, days_ahead: int) -> int:
-        """向 ESPN 補抓今日起 N 天賽程（若該日尚無賽事）。"""
+        """向 ESPN 補抓今日起 N 天賽程（已查過或 DB 已有則跳過）。"""
         from sportsbet.data.espn_schedule import EspnScheduleClient
 
         today = date.today()
@@ -184,6 +184,8 @@ class PredictionService:
             d = (today + timedelta(days=offset)).isoformat()
             existing = self.db.get_games(sport, d)
             if not existing.empty:
+                continue
+            if self.db.is_schedule_date_checked(sport, d):
                 continue
             df = client.sync_date_to_database(self.db, sport, d)
             synced += len(df)
@@ -286,6 +288,60 @@ class PredictionService:
             forecasts.append(fc)
         return forecasts
 
+    def load_stored_for_date(
+        self,
+        sport: Sport,
+        match_date: str | None = None,
+    ) -> list[GameForecast]:
+        """讀取指定日已儲存預測（不重新計算）。"""
+        from sportsbet.models.forecast import game_forecast_from_db_row
+
+        d = match_date or date.today().isoformat()
+        games = self.db.get_games(sport, d)
+        if games.empty:
+            return []
+        fc_rows = self.db.get_game_forecasts_for_ids([int(g) for g in games["id"].tolist()])
+        out: list[GameForecast] = []
+        for _, g in games.drop_duplicates(subset=["id"]).iterrows():
+            row = fc_rows.get(int(g["id"]))
+            if row is not None:
+                out.append(game_forecast_from_db_row(row, g))
+        return out
+
+    def load_stored_upcoming(
+        self,
+        sport: Sport,
+        *,
+        days_ahead: int = 14,
+    ) -> list[GameForecast]:
+        """從 DB 讀取已儲存的今日/未來預測（不重新計算、不連 API）。"""
+        from sportsbet.models.forecast import game_forecast_from_db_row
+
+        games = self._collect_dashboard_games(sport, days_ahead=days_ahead)
+        if games.empty:
+            return []
+
+        game_ids = [int(g) for g in games["id"].tolist()]
+        fc_rows = self.db.get_game_forecasts_for_ids(game_ids)
+        today_str = date.today().isoformat()
+        _FINISHED_LOCAL = ("final", "FT", "AOT", "Finished", "POST")
+        forecasts: list[GameForecast] = []
+
+        for _, g in games.drop_duplicates(subset=["id"]).iterrows():
+            gid = int(g["id"])
+            row = fc_rows.get(gid)
+            if row is None:
+                continue
+            fc = game_forecast_from_db_row(row, g)
+            from sportsbet.ui.matchup_display import taipei_match_date
+
+            tw = taipei_match_date(fc.match_datetime, fc.match_date)
+            is_today = tw == today_str
+            if fc.status in _FINISHED_LOCAL and not is_today:
+                continue
+            forecasts.append(fc)
+        return forecasts
+
     def get_upcoming_forecasts(
         self,
         sport: Sport,
@@ -295,13 +351,7 @@ class PredictionService:
     ) -> list[GameForecast]:
         if refresh:
             return self.run_upcoming(sport, days_ahead=days_ahead)
-        games = self._collect_dashboard_games(sport, days_ahead=days_ahead)
-        stats = self.db.get_team_stats(sport).set_index("team")
-        return [
-            fc
-            for _, g in games.iterrows()
-            if (fc := self.forecast_game_row(sport, g, stats)) is not None
-        ]
+        return self.load_stored_upcoming(sport, days_ahead=days_ahead)
 
     def upcoming_summary_table(self, forecasts: list[GameForecast]) -> pd.DataFrame:
         """現在/未來賽事預測總表。"""

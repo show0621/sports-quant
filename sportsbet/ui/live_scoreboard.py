@@ -110,7 +110,12 @@ def _load_forecast(
     g: pd.Series,
     svc: PredictionService | None,
 ) -> GameForecast | None:
+    from sportsbet.models.forecast import game_forecast_from_db_row
+
     gid = int(g["id"])
+    row = db.get_game_forecast_row(gid)
+    if row is not None:
+        return game_forecast_from_db_row(row, g)
     if svc is None:
         return None
     stats = svc.db.get_team_stats(sport).set_index("team")

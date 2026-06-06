@@ -179,7 +179,7 @@ def build_daily_predictions(sport: str) -> pd.DataFrame:
     if board.empty:
         return pd.DataFrame()
 
-    forecasts = {fc.game_id: fc for fc in svc.run_for_date(sport, today) if fc.game_id}
+    forecasts = {fc.game_id: fc for fc in svc.load_stored_for_date(sport, today) if fc.game_id}
     rows = []
     for _, g in board.drop_duplicates(subset=["game_id", "market", "selection"]).iterrows():
         gid = int(g["game_id"])
@@ -565,8 +565,13 @@ def page_model_health(sport: str) -> None:
 
 
 def page_bankroll(sport: str) -> None:
+    from sportsbet.ui.bankroll_display import format_bankroll_trades
+
     st.header("資金回測模擬 (Bankroll Simulation)")
-    st.caption(f"起始資金 ${config.INITIAL_BANKROLL:,.0f} · 四分之一凱利 · 僅下注 EV > 門檻")
+    st.caption(
+        f"起始資金 NT$ {config.INITIAL_BANKROLL:,.0f} · 四分之一凱利 · "
+        f"僅下注 EV > {config.MIN_EV_THRESHOLD:.0%} · 依時間序逐筆模擬"
+    )
 
     db = get_db()
     df = db.get_backtest_frame(sport)
@@ -574,41 +579,58 @@ def page_bankroll(sport: str) -> None:
         st.warning("尚無回測資料。")
         return
 
-    df_ml = df[df["market"] == "moneyline"].copy() if "market" in df.columns else df.copy()
-    if df_ml.empty:
-        st.warning(
-            "尚無 moneyline 賠率。請執行 `python scripts/backfill_playsport_moneyline.py --rebuild` "
-            "或 backtest sync。"
-        )
+    df = df.dropna(subset=["model_prob", "won", "odds"]).copy()
+    if df.empty:
+        st.warning("尚無可回測的預測與賽果。")
         return
 
-    df_ml["model_prob"] = df_ml["model_prob"].astype(float).clip(0.0, 1.0)
+    market_opts = {"全部": "all", "勝負": "moneyline", "大小分": "total", "讓分": "spread"}
+    market_label = st.selectbox("盤口篩選", list(market_opts.keys()), index=0)
+    market_key = market_opts[market_label]
+    if market_key != "all":
+        df = df[df["market"] == market_key].copy()
 
-    if "ev" not in df_ml.columns:
+    if df.empty:
+        st.warning(f"「{market_label}」尚無可回測資料。")
+        return
+
+    df["model_prob"] = df["model_prob"].astype(float).clip(0.0, 1.0)
+
+    if "ev" not in df.columns or df["ev"].isna().all():
         risk = RiskManager()
-        df_ml["ev"] = df_ml.apply(
+        df["ev"] = df.apply(
             lambda r: risk.expected_value(float(r["model_prob"]), float(r["odds"])), axis=1
         )
 
     evaluator = EvaluationModule()
-    report = evaluator.run_full_evaluation(df_ml)
+    report = evaluator.run_full_evaluation(df)
     summary = report.backtest_summary
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("ROI", f"{summary.get('roi', 0):.2%}")
-    c2.metric("最終淨值", f"${summary.get('final_bankroll', config.INITIAL_BANKROLL):,.0f}")
+    c2.metric("最終淨值", f"NT$ {summary.get('final_bankroll', config.INITIAL_BANKROLL):,.0f}")
     c3.metric("最大回撤", f"{summary.get('max_drawdown', 0):.2%}")
     c4.metric("下注筆數", summary.get("total_trades", 0))
+    c5.metric("總損益", f"NT$ {summary.get('total_pnl', 0):+,.0f}")
 
     eq = report.equity_curve.reset_index(drop=True)
     eq_df = pd.DataFrame({"step": eq.index, "equity": eq.values})
     fig = px.line(eq_df, x="step", y="equity", title="淨值成長曲線 (Equity Curve)")
     fig.add_hline(y=config.INITIAL_BANKROLL, line_dash="dot", annotation_text="起始資金")
+    fig.update_layout(yaxis_tickprefix="NT$ ", yaxis_tickformat=",.0f")
     st.plotly_chart(fig, use_container_width=True)
 
     if not report.trades.empty:
         st.subheader("交易明細")
-        st.dataframe(report.trades, use_container_width=True)
+        st.caption(
+            "每列為一筆實際下注：日期、對戰、盤口、投注項目、模型勝率、賠率、"
+            "凱利倉位、投注金額（台幣）、輸贏與損益。"
+        )
+        detail = format_bankroll_trades(report.trades, sport)
+        st.dataframe(detail, use_container_width=True, hide_index=True)
+        wins = int(report.trades["won"].sum()) if "won" in report.trades.columns else 0
+        total = len(report.trades)
+        st.caption(f"命中 {wins}/{total}（{wins/total:.1%}）" if total else "")
 
 
 def main() -> None:

@@ -106,7 +106,7 @@ def page_live_monitor(
     risk = RiskManager()
     forecasts = {
         fc.game_id: fc
-        for fc in prediction_svc.run_for_date(sport, today)
+        for fc in prediction_svc.load_stored_for_date(sport, today)
         if fc.game_id
     }
 
