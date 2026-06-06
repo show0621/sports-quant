@@ -277,6 +277,11 @@ def build_game_forecast(
             db, sport, home_team, away_team, match_date, lam_h, lam_a,
             blend=config.MC_H2H_LAMBDA_BLEND,
         )
+        from sportsbet.models.player_scoring import blend_lambdas_with_lineup_scoring
+
+        lam_h, lam_a = blend_lambdas_with_lineup_scoring(
+            db, sport, home_team, away_team, match_date, lam_h, lam_a,
+        )
         if home_adj is not None and away_adj is not None:
             lam_h, lam_a = adjust_lambdas_from_roster(
                 lam_h, lam_a,

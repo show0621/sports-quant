@@ -161,6 +161,16 @@ class DataOrchestrator:
         acc = accumulate_after_sync(self.db, sport)
         out.update(acc)
 
+        if sport == "nba":
+            from sportsbet.data.boxscore_sync import sync_nba_box_scores
+
+            bs = sync_nba_box_scores(
+                self.db,
+                regular_days_back=min(days, config.BOXSCORE_REGULAR_DAYS_BACK),
+                max_regular=min(80, max(30, days * 4)),
+            )
+            out.update(bs)
+
         self.db.set_backtest_sync_meta(sport, "daily_synced_at", today.isoformat())
         logger.info("daily sync sport=%s stats=%s", sport, out)
 

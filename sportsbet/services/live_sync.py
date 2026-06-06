@@ -75,6 +75,17 @@ class LiveSyncService:
             acc = accumulate_after_sync(self.db, sport)
             out.update({k: int(v) for k, v in acc.items()})
 
+            if sport == "nba":
+                from sportsbet.data.boxscore_sync import sync_nba_box_scores
+
+                bs = sync_nba_box_scores(
+                    self.db,
+                    regular_days_back=21,
+                    max_finals=30,
+                    max_regular=40,
+                )
+                out.update({k: int(v) for k, v in bs.items()})
+
             now = date.today().isoformat()
             self.db.set_backtest_sync_meta(sport, "live_synced_at", now)
 

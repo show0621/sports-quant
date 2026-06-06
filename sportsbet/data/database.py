@@ -216,6 +216,38 @@ CREATE TABLE IF NOT EXISTS game_ledger (
     FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_game_ledger_date ON game_ledger(sport, match_date);
+
+CREATE TABLE IF NOT EXISTS player_game_stats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_id INTEGER NOT NULL,
+    sport TEXT NOT NULL,
+    player_id TEXT NOT NULL,
+    player_name TEXT,
+    team TEXT NOT NULL,
+    is_home INTEGER DEFAULT 0,
+    minutes REAL,
+    points INTEGER,
+    rebounds INTEGER,
+    assists INTEGER,
+    threes INTEGER,
+    steals INTEGER,
+    blocks INTEGER,
+    turnovers INTEGER,
+    updated_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(game_id, player_id),
+    FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_pgs_game ON player_game_stats(game_id);
+CREATE INDEX IF NOT EXISTS idx_pgs_player_date ON player_game_stats(sport, player_id);
+
+CREATE TABLE IF NOT EXISTS game_quarter_scores (
+    game_id INTEGER PRIMARY KEY,
+    sport TEXT NOT NULL,
+    home_q1 INTEGER, home_q2 INTEGER, home_q3 INTEGER, home_q4 INTEGER,
+    away_q1 INTEGER, away_q2 INTEGER, away_q3 INTEGER, away_q4 INTEGER,
+    updated_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE
+);
 """
 
 _MIGRATION_COLUMNS = [
@@ -234,6 +266,7 @@ _MIGRATION_COLUMNS = [
     ("games", "period", "INTEGER"),
     ("games", "clock", "TEXT"),
     ("games", "status_detail", "TEXT"),
+    ("games", "espn_event_id", "TEXT"),
 ]
 
 
@@ -290,6 +323,7 @@ class SportsDatabase:
         period: int | None = None,
         clock: str | None = None,
         status_detail: str | None = None,
+        espn_event_id: str | None = None,
     ) -> int:
         from sportsbet.data.team_names import is_cross_sport_game
 
@@ -302,8 +336,9 @@ class SportsDatabase:
                 """
                 INSERT INTO games (sport, match_date, match_datetime, home_team, away_team,
                                    home_score, away_score, status, home_logo_url, away_logo_url,
-                                   season_type, competition_note, period, clock, status_detail)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                   season_type, competition_note, period, clock, status_detail,
+                                   espn_event_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(sport, match_date, home_team, away_team) DO UPDATE SET
                     match_datetime=excluded.match_datetime,
                     home_score=COALESCE(excluded.home_score, games.home_score),
@@ -315,12 +350,14 @@ class SportsDatabase:
                     competition_note=COALESCE(excluded.competition_note, games.competition_note),
                     period=COALESCE(excluded.period, games.period),
                     clock=COALESCE(excluded.clock, games.clock),
-                    status_detail=COALESCE(excluded.status_detail, games.status_detail)
+                    status_detail=COALESCE(excluded.status_detail, games.status_detail),
+                    espn_event_id=COALESCE(excluded.espn_event_id, games.espn_event_id)
                 """,
                 (
                     sport, match_date, match_datetime, home_team, away_team,
                     home_score, away_score, status, home_logo_url, away_logo_url,
                     season_type, competition_note, period, clock, status_detail,
+                    espn_event_id,
                 ),
             )
             if cur.lastrowid:
@@ -1579,4 +1616,190 @@ class SportsDatabase:
                     post_snapshot_json = excluded.post_snapshot_json
                 """,
                 (game_id, sport, match_date, home_team, away_team, now, snapshot_json),
+            )
+
+    def set_game_espn_event_id(self, game_id: int, espn_event_id: str) -> None:
+        with self.connection() as conn:
+            conn.execute(
+                "UPDATE games SET espn_event_id = ? WHERE id = ?",
+                (str(espn_event_id), game_id),
+            )
+
+    def upsert_player_game_stat(
+        self,
+        game_id: int,
+        sport: Sport,
+        player_id: str,
+        team: str,
+        *,
+        player_name: str | None = None,
+        is_home: bool = False,
+        minutes: float | None = None,
+        points: int | None = None,
+        rebounds: int | None = None,
+        assists: int | None = None,
+        threes: int | None = None,
+        steals: int | None = None,
+        blocks: int | None = None,
+        turnovers: int | None = None,
+    ) -> None:
+        with self.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO player_game_stats (
+                    game_id, sport, player_id, player_name, team, is_home,
+                    minutes, points, rebounds, assists, threes, steals, blocks, turnovers
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(game_id, player_id) DO UPDATE SET
+                    player_name=excluded.player_name,
+                    team=excluded.team,
+                    is_home=excluded.is_home,
+                    minutes=excluded.minutes,
+                    points=excluded.points,
+                    rebounds=excluded.rebounds,
+                    assists=excluded.assists,
+                    threes=excluded.threes,
+                    steals=excluded.steals,
+                    blocks=excluded.blocks,
+                    turnovers=excluded.turnovers,
+                    updated_at=datetime('now')
+                """,
+                (
+                    game_id, sport, player_id, player_name, team, int(is_home),
+                    minutes, points, rebounds, assists, threes, steals, blocks, turnovers,
+                ),
+            )
+
+    def upsert_game_quarter_scores(
+        self,
+        game_id: int,
+        sport: Sport,
+        *,
+        home_quarters: list[int | None],
+        away_quarters: list[int | None],
+    ) -> None:
+        hq = (home_quarters + [None] * 4)[:4]
+        aq = (away_quarters + [None] * 4)[:4]
+        with self.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO game_quarter_scores (
+                    game_id, sport,
+                    home_q1, home_q2, home_q3, home_q4,
+                    away_q1, away_q2, away_q3, away_q4
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(game_id) DO UPDATE SET
+                    home_q1=excluded.home_q1, home_q2=excluded.home_q2,
+                    home_q3=excluded.home_q3, home_q4=excluded.home_q4,
+                    away_q1=excluded.away_q1, away_q2=excluded.away_q2,
+                    away_q3=excluded.away_q3, away_q4=excluded.away_q4,
+                    updated_at=datetime('now')
+                """,
+                (game_id, sport, *hq, *aq),
+            )
+
+    def get_games_missing_box_scores(
+        self,
+        sport: Sport,
+        *,
+        since_date: str | None = None,
+        finals_only: bool = False,
+        limit: int = 300,
+    ) -> pd.DataFrame:
+        sql = """
+            SELECT g.*
+            FROM games g
+            LEFT JOIN (
+                SELECT game_id, COUNT(*) AS n FROM player_game_stats GROUP BY game_id
+            ) p ON p.game_id = g.id
+            WHERE g.sport = ?
+              AND g.status IN ('final', 'FT', 'AOT', 'Finished', 'POST')
+              AND g.home_score IS NOT NULL
+              AND g.away_score IS NOT NULL
+              AND (p.n IS NULL OR p.n = 0)
+        """
+        params: list[Any] = [sport]
+        if since_date:
+            sql += " AND g.match_date >= ?"
+            params.append(since_date)
+        if finals_only:
+            sql += " AND (g.competition_note LIKE '%總冠軍%' OR g.season_type LIKE '%季後%')"
+        sql += """
+            ORDER BY
+              CASE WHEN g.competition_note LIKE '%總冠軍%' THEN 0
+                   WHEN g.season_type LIKE '%季後%' THEN 1
+                   ELSE 2 END,
+              g.match_date DESC
+            LIMIT ?
+        """
+        params.append(limit)
+        with self.connection() as conn:
+            return pd.read_sql_query(sql, conn, params=params)
+
+    def get_player_game_stats(self, game_id: int) -> pd.DataFrame:
+        with self.connection() as conn:
+            return pd.read_sql_query(
+                "SELECT * FROM player_game_stats WHERE game_id = ? ORDER BY points DESC",
+                conn,
+                params=(game_id,),
+            )
+
+    def get_game_quarter_scores(self, game_id: int) -> pd.Series | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM game_quarter_scores WHERE game_id = ?",
+                (game_id,),
+            ).fetchone()
+        return pd.Series(dict(row)) if row else None
+
+    def get_player_recent_box_scores(
+        self,
+        sport: Sport,
+        player_id: str,
+        before_date: str,
+        *,
+        limit: int = 5,
+    ) -> pd.DataFrame:
+        with self.connection() as conn:
+            return pd.read_sql_query(
+                """
+                SELECT p.*, g.match_date
+                FROM player_game_stats p
+                JOIN games g ON g.id = p.game_id
+                WHERE p.sport = ? AND p.player_id = ? AND g.match_date < ?
+                  AND p.points IS NOT NULL
+                ORDER BY g.match_date DESC
+                LIMIT ?
+                """,
+                conn,
+                params=(sport, player_id, before_date, limit),
+            )
+
+    def get_h2h_games_with_box_scores(
+        self,
+        sport: Sport,
+        team_a: str,
+        team_b: str,
+        before_date: str,
+        *,
+        limit: int = 5,
+    ) -> pd.DataFrame:
+        with self.connection() as conn:
+            return pd.read_sql_query(
+                """
+                SELECT g.*
+                FROM games g
+                WHERE g.sport = ?
+                  AND g.match_date < ?
+                  AND g.status IN ('final', 'FT', 'AOT', 'Finished', 'POST')
+                  AND (
+                        (g.home_team = ? AND g.away_team = ?)
+                     OR (g.home_team = ? AND g.away_team = ?)
+                  )
+                  AND EXISTS (SELECT 1 FROM player_game_stats p WHERE p.game_id = g.id)
+                ORDER BY g.match_date DESC
+                LIMIT ?
+                """,
+                conn,
+                params=(sport, before_date, team_a, team_b, team_b, team_a, limit),
             )

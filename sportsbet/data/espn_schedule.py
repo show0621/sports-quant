@@ -152,6 +152,7 @@ class EspnScheduleClient:
             season_type, comp_note = _parse_season_meta(event)
             rows.append(
                 {
+                    "espn_event_id": str(event.get("id", "")),
                     "match_date": d_str,
                     "home_team": home,
                     "away_team": away,
@@ -191,6 +192,7 @@ class EspnScheduleClient:
                     period=g.get("period"),
                     clock=g.get("clock"),
                     status_detail=g.get("status_detail"),
+                    espn_event_id=g.get("espn_event_id"),
                 )
             except ValueError as exc:
                 logger.debug("skip game %s vs %s: %s", g.get("away_team"), g.get("home_team"), exc)

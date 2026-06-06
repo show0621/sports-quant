@@ -66,6 +66,50 @@ def _card_title(fc, sport: str) -> str:
     )
 
 
+def _render_h2h_box_context(fc, sport: str, svc: PredictionService) -> None:
+    """顯示近期對戰 box score（逐節 + 得分王）。"""
+    db = svc.db
+    md = str(getattr(fc, "match_date", ""))[:10]
+    home = getattr(fc, "home_team", "")
+    away = getattr(fc, "away_team", "")
+    h2h = db.get_h2h_games_with_box_scores(sport, home, away, md, limit=1)
+    if h2h.empty:
+        gid = getattr(fc, "game_id", None)
+        if gid and str(getattr(fc, "status", "")).lower() == "final":
+            stats = db.get_player_game_stats(int(gid))
+            q = db.get_game_quarter_scores(int(gid))
+            if stats.empty:
+                return
+            st.markdown("**本場 Box Score（得分王）**")
+            if q is not None:
+                st.caption(
+                    f"逐節 客 Q1–Q4: {q.get('away_q1','—')}-{q.get('away_q2','—')}-"
+                    f"{q.get('away_q3','—')}-{q.get('away_q4','—')} · "
+                    f"主 Q1–Q4: {q.get('home_q1','—')}-{q.get('home_q2','—')}-"
+                    f"{q.get('home_q3','—')}-{q.get('home_q4','—')}"
+                )
+            show = stats.head(6)[["player_name", "team", "points", "rebounds", "assists", "minutes"]]
+            st.dataframe(show, use_container_width=True, hide_index=True)
+        return
+
+    g = h2h.iloc[0]
+    gid = int(g["id"])
+    stats = db.get_player_game_stats(gid)
+    q = db.get_game_quarter_scores(gid)
+    st.markdown(f"**前次交鋒 Box Score（{g['match_date']}）**")
+    st.caption(f"比分 客 {int(g['away_score'])} – 主 {int(g['home_score'])}")
+    if q is not None:
+        st.caption(
+            f"逐節 客: {q.get('away_q1','—')}-{q.get('away_q2','—')}-"
+            f"{q.get('away_q3','—')}-{q.get('away_q4','—')} · "
+            f"主: {q.get('home_q1','—')}-{q.get('home_q2','—')}-"
+            f"{q.get('home_q3','—')}-{q.get('home_q4','—')}"
+        )
+    if not stats.empty:
+        show = stats.head(8)[["player_name", "team", "points", "rebounds", "assists", "minutes"]]
+        st.dataframe(show, use_container_width=True, hide_index=True)
+
+
 def _render_forecast_card(
     fc,
     sport: str,
@@ -143,6 +187,9 @@ def _render_forecast_card(
         with ic2:
             _render_injury_impact(fc, "away")
 
+        if sport == "nba":
+            _render_h2h_box_context(fc, sport, svc)
+
         detail = team_detail_dataframe(fc).copy()
         pct_cols = [
             "畢達哥拉斯勝率", "賽季勝率", "近況勝率", "Log5單場勝率", "貝氏修正勝率",
@@ -175,6 +222,16 @@ def page_current_future_predictions(sport: str, svc: PredictionService) -> None:
     with col_b:
         sync_btn = st.button("同步賽程並重算", type="secondary")
         recalc_btn = st.button("重新計算並儲存預測", type="primary")
+        if sport == "nba" and st.button("同步 Box Score", type="secondary"):
+            with st.spinner("拉取 ESPN 逐場 box score（優先總冠軍賽）…"):
+                from sportsbet.data.boxscore_sync import sync_nba_box_scores
+
+                bs = sync_nba_box_scores(svc.db, regular_days_back=max_days)
+            st.success(
+                f"已同步 {bs.get('boxscore_games', 0)} 場 · "
+                f"{bs.get('boxscore_players', 0)} 筆球員數據"
+            )
+            st.rerun()
     if sync_btn:
         with st.spinner("向 ESPN 補抓賽程…"):
             n = svc.ensure_schedule_sync(sport, days_ahead=max(days_ahead, max_days))
