@@ -51,3 +51,40 @@ def prob_total_over(
 def prob_total_under(line: float, lambda_home: float, lambda_away: float, **kwargs) -> float:
     """P(總分 < line)。"""
     return 1.0 - prob_total_over(line - 0.001, lambda_home, lambda_away, **kwargs)
+
+
+def margin_std_for_sport(sport: str, *, pred_total: float | None = None) -> float:
+    """主客淨勝分差的不確定度（常態近似）。"""
+    if sport == "mlb":
+        return 2.8
+    if pred_total is not None and pred_total > 0:
+        return max(8.0, min(14.0, float(pred_total) ** 0.5 * 1.15))
+    return 11.0
+
+
+def prob_home_covers_spread(
+    handicap: float,
+    pred_margin: float,
+    *,
+    sport: str = "nba",
+    pred_total: float | None = None,
+) -> float:
+    """P(主隊讓分過盤)；handicap 與 odds 表一致（主隊 +handicap > 客隊得分)。"""
+    from scipy.stats import norm
+
+    std = margin_std_for_sport(sport, pred_total=pred_total)
+    return float(norm.cdf((pred_margin + handicap) / max(std, 0.1)))
+
+
+def prob_away_covers_spread(
+    handicap: float,
+    pred_margin: float,
+    *,
+    sport: str = "nba",
+    pred_total: float | None = None,
+) -> float:
+    """P(客隊讓分過盤)。"""
+    from scipy.stats import norm
+
+    std = margin_std_for_sport(sport, pred_total=pred_total)
+    return float(norm.cdf((handicap - pred_margin) / max(std, 0.1)))

@@ -9,14 +9,17 @@ import streamlit as st
 
 from sportsbet.data.database import SportsDatabase
 from sportsbet.data.team_logos import resolve_logo_url
-from sportsbet.data.team_names import team_bilingual
 from sportsbet.ui.matchup_display import (
     format_match_datetime,
     render_season_badges_html,
     taipei_match_date,
     team_bilingual_html,
 )
-from sportsbet.ui.odds_display import summarize_game_odds
+from sportsbet.ui.odds_display import (
+    build_game_market_picks,
+    format_market_pick_html,
+    summarize_game_odds,
+)
 
 if TYPE_CHECKING:
     from sportsbet.services.prediction_service import PredictionService
@@ -97,14 +100,6 @@ def _load_forecast(
     }
 
 
-def _winner_label(name: str, sport: str, prob: float | None) -> str:
-    en, zh = team_bilingual(name, sport)
-    show = f"{en} / {zh}" if zh else en
-    if prob is not None and not pd.isna(prob):
-        return f"{show} ({_pct(prob)})"
-    return show
-
-
 def _render_prediction_strip(
     db: SportsDatabase,
     sport: str,
@@ -121,78 +116,70 @@ def _render_prediction_strip(
         )
         return
 
-    winner = str(fc.get("predicted_winner") or "—")
     home = str(g["home_team"])
     away = str(g["away_team"])
-    if winner == home:
-        win_prob = fc.get("home_win_prob")
-    elif winner == away:
-        win_prob = fc.get("away_win_prob")
-    else:
-        win_prob = None
+    is_final = status == "final"
+    hs = int(g["home_score"]) if is_final and pd.notna(g.get("home_score")) else None
+    aws = int(g["away_score"]) if is_final and pd.notna(g.get("away_score")) else None
+
+    odds = summarize_game_odds(db, int(g["id"]))
+    picks = build_game_market_picks(
+        fc,
+        odds,
+        sport,
+        home_team=home,
+        away_team=away,
+        home_score=hs,
+        away_score=aws,
+        is_final=is_final,
+    )
+
+    ph, pa = fc.get("predicted_home_score"), fc.get("predicted_away_score")
+    score_sub = ""
+    if ph is not None and pa is not None and not pd.isna(ph) and not pd.isna(pa):
+        score_sub = f"預估比分 {int(ph)}–{int(pa)}"
 
     margin = fc.get("predicted_margin")
-    margin_txt = "—"
+    margin_hint = ""
     if margin is not None and not pd.isna(margin):
-        m = float(margin)
-        if m > 0:
-            margin_txt = f"主隊淨勝 {m:+.1f}"
-        elif m < 0:
-            margin_txt = f"客隊淨勝 {-m:.1f}"
-        else:
-            margin_txt = "平手"
+        margin_hint = f"模型淨勝 {float(margin):+.1f}"
 
-    pred_score = ""
-    ph, pa = fc.get("predicted_home_score"), fc.get("predicted_away_score")
-    if ph is not None and pa is not None and not pd.isna(ph) and not pd.isna(pa):
-        pred_score = f" · 預估比分 {int(ph)}–{int(pa)}"
-
-    total_line = fc.get("total_line")
-    odds = summarize_game_odds(db, int(g["id"]))
-    market_line = odds.get("total_line") if odds.get("total_line") is not None else total_line
-    pred_total = fc.get("predicted_total")
-    prob_over = fc.get("prob_over")
-
-    total_parts: list[str] = []
-    if pred_total is not None and not pd.isna(pred_total):
-        total_parts.append(f"預估總分 {float(pred_total):.1f}")
-    if market_line is not None and not pd.isna(market_line):
-        total_parts.append(f"盤口 {float(market_line):.1f}")
-    if prob_over is not None and not pd.isna(prob_over):
-        under = fc.get("prob_under")
-        if under is None or pd.isna(under):
-            under = 1.0 - float(prob_over)
-        total_parts.append(f"大 {_pct(prob_over)} / 小 {_pct(under)}")
-    total_txt = " · ".join(total_parts) if total_parts else "—"
-
-    result_tag = ""
-    if status == "final" and fc.get("pick_correct") is not None:
-        result_tag = (
-            "<span class='sq-pred-hit sq-pred-ok'>✓ 預測正確</span>"
-            if fc.get("pick_correct")
-            else "<span class='sq-pred-hit sq-pred-miss'>✗ 預測錯誤</span>"
-        )
-
+    ml_body = format_market_pick_html(picks.get("moneyline"), extra_sub=score_sub)
+    spread_body = format_market_pick_html(picks.get("spread"), extra_sub=margin_hint)
     total_label = "大小分" if sport == "nba" else "大小分（總得分）"
+
+    summary_tags = ""
+    if is_final:
+        parts: list[str] = []
+        for key, label in [("moneyline", "勝負"), ("spread", "讓分"), ("total", "大小")]:
+            p = picks.get(key)
+            if p is None or p.settled is None:
+                continue
+            mark = "✓" if p.settled else "✗"
+            cls = "sq-pred-ok" if p.settled else "sq-pred-miss"
+            parts.append(f"<span class='sq-pred-hit {cls}'>{mark} {label}</span>")
+        if parts:
+            summary_tags = f"<div class='sq-pred-summary'>{''.join(parts)}</div>"
+
     st.markdown(
         f"""
         <div class="sq-pred-strip">
             <div class="sq-pred-grid">
                 <div class="sq-pred-cell">
                     <div class="sq-pred-label">勝負預測</div>
-                    <div class="sq-pred-value">{_winner_label(winner, sport, win_prob)}{pred_score}</div>
+                    {ml_body}
                     <div class="sq-pred-sub">主 {_pct(fc.get('home_win_prob'))} · 客 {_pct(fc.get('away_win_prob'))}</div>
                 </div>
                 <div class="sq-pred-cell">
-                    <div class="sq-pred-label">勝分差預測</div>
-                    <div class="sq-pred-value">{margin_txt}</div>
+                    <div class="sq-pred-label">勝分差（讓分）</div>
+                    {spread_body}
                 </div>
                 <div class="sq-pred-cell">
                     <div class="sq-pred-label">{total_label}</div>
-                    <div class="sq-pred-value">{total_txt}</div>
+                    {format_market_pick_html(picks.get("total"))}
                 </div>
             </div>
-            {result_tag}
+            {summary_tags}
         </div>
         """,
         unsafe_allow_html=True,
@@ -216,7 +203,7 @@ def render_live_scoreboard(
     st.markdown(
         f"<div class='sq-hero'><h1>{_sport_emoji(sport)} 今日賽事速報</h1>"
         f"<p>{today}（台灣）· 共 {len(games)} 場 · 進行中 {live_n} · 已完賽 {final_n}"
-        f" · 含模型勝負 / 勝分差 / 大小分預測</p></div>",
+        f" · 含模型預測 · 盤口賠率 · EV · 完賽覆盤</p></div>",
         unsafe_allow_html=True,
     )
 

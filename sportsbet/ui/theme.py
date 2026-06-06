@@ -212,6 +212,17 @@ def inject_dashboard_theme() -> None:
         }
         .sq-pred-ok { background: #dcfce7; color: #166534; }
         .sq-pred-miss { background: #fee2e2; color: #991b1b; }
+        .sq-pred-ev-pos { color: #15803d; font-weight: 600; }
+        .sq-pred-ev-neg { color: #94a3b8; }
+        .sq-pred-result { margin-top: 0.25rem; }
+        .sq-pred-summary {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.35rem;
+            margin-top: 0.5rem;
+            padding-top: 0.45rem;
+            border-top: 1px dashed var(--sq-border-light);
+        }
 
         /* 盤口面板 */
         .sq-odds-panel {
