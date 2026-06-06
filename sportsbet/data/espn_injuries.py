@@ -8,6 +8,7 @@ ESPN 公開 API：聯盟傷兵名單與球隊 roster。
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date
 from typing import Any, Literal
 
@@ -95,6 +96,21 @@ def _athlete_id(athlete: dict[str, Any]) -> str | None:
     aid = athlete.get("id")
     if aid is not None:
         return f"espn-{aid}"
+    for link in athlete.get("links") or []:
+        href = str(link.get("href") or "")
+        m = re.search(r"/id/(\d+)/", href)
+        if m:
+            return f"espn-{m.group(1)}"
+    headshot = (athlete.get("headshot") or {}).get("href") or ""
+    m = re.search(r"/players/full/(\d+)\.", str(headshot))
+    if m:
+        return f"espn-{m.group(1)}"
+    name = str(athlete.get("displayName") or "").strip()
+    team = str((athlete.get("team") or {}).get("displayName") or "").strip()
+    if name and team:
+        slug = re.sub(r"[^a-z0-9]+", "-", f"{team}-{name}".lower()).strip("-")
+        if slug:
+            return f"espn-name-{slug}"
     return None
 
 
@@ -188,8 +204,12 @@ def sync_espn_injuries(
         if not status or status == "Available":
             continue
 
-        espn_team = row["espn_team_name"]
+        espn_team = row["espn_team_name"] or str(
+            (athlete.get("team") or {}).get("displayName") or ""
+        )
         team = resolve_team_in_database(db, sport, normalize_espn_team(espn_team, sport))
+        if not team:
+            continue
 
         name = athlete.get("displayName") or f"{athlete.get('firstName', '')} {athlete.get('lastName', '')}".strip()
         pos = (athlete.get("position") or {}).get("abbreviation") or ""
@@ -207,6 +227,7 @@ def sync_espn_injuries(
         )
         n += 1
 
+    db.set_backtest_sync_meta(sport, "injuries_synced_at", date.today().isoformat())
     logger.info("ESPN 傷兵同步完成 sport=%s count=%d", sport, n)
     return n
 

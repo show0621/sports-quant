@@ -21,7 +21,7 @@ if str(ROOT) not in sys.path:
 from sportsbet import config  # noqa: E402
 from sportsbet.data.database import SportsDatabase  # noqa: E402
 from sportsbet.data.db_github_sync import push_database_to_github  # noqa: E402
-from sportsbet.data.data_quality import data_quality_summary  # noqa: E402
+from sportsbet.data.data_quality import data_quality_detail  # noqa: E402
 from sportsbet.data.orchestrator import DataOrchestrator  # noqa: E402
 from sportsbet.data.provider import api_key_configured, describe_data_source  # noqa: E402
 from sportsbet.evaluation.evaluator import EvaluationModule  # noqa: E402
@@ -521,7 +521,7 @@ def main() -> None:
         st.sidebar.error(full)
 
     st.sidebar.caption(describe_data_source(sport))
-    quality = data_quality_summary(get_db(), sport)  # type: ignore[arg-type]
+    quality = data_quality_detail(get_db(), sport)  # type: ignore[arg-type]
     q_labels = {
         "team_stats": "球隊統計",
         "historical_games": "歷史賽果",
@@ -531,7 +531,10 @@ def main() -> None:
         "player_rolling": "球員滾動",
     }
     for key, label in q_labels.items():
-        st.sidebar.caption(f"{'✅' if quality.get(key) else '⬜'} {label}")
+        info = quality.get(key) or {}
+        mark = "✅" if info.get("ok") else "⬜"
+        detail = str(info.get("detail") or "")
+        st.sidebar.caption(f"{mark} {label} · {detail}")
     if config.jbot_configured():
         st.sidebar.success("JBot 歷史盤口已設定")
     elif config.PLAYSPORT_MONEYLINE_ENABLED:

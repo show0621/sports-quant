@@ -7,7 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from sportsbet import config
-from sportsbet.data.data_quality import data_quality_summary
+from sportsbet.data.data_quality import data_quality_detail
 from sportsbet.data.database import SportsDatabase
 from sportsbet.risk.ev import RiskManager
 from sportsbet.services.live_sync import LiveSyncService
@@ -75,7 +75,7 @@ def page_live_monitor(
         else:
             st.success(f"Live 狀態正常 · {latest.get('duration_ms', 0)} ms")
 
-    quality = data_quality_summary(db, sport)  # type: ignore[arg-type]
+    quality = data_quality_detail(db, sport)  # type: ignore[arg-type]
     qcols = st.columns(5)
     labels = [
         ("team_stats", "球隊統計"),
@@ -85,7 +85,8 @@ def page_live_monitor(
         ("historical_games", "歷史賽果"),
     ]
     for col, (key, label) in zip(qcols, labels):
-        col.metric(label, "✅" if quality.get(key) else "⬜")
+        info = quality.get(key) or {}
+        col.metric(label, "✅" if info.get("ok") else "⬜", str(info.get("detail") or ""))
 
     today = date.today().isoformat()
     board = db.get_daily_board(sport, today)
