@@ -29,8 +29,8 @@ Sport = Literal["nba", "mlb"]
 USER_AGENT = "sports-quant/1.0 (+https://github.com/show0621/sports-quant)"
 BASE_URL = "https://www.playsport.cc/gamesData/teams"
 
-# allianceid：1=NBA, 6=MLB（依玩運彩分站）
-ALLIANCE_ID: dict[str, int] = {"nba": 1, "mlb": 6}
+# allianceid：3=NBA, 1=MLB（玩運彩 gamesData/teams 分站）
+ALLIANCE_ID: dict[str, int] = {"nba": 3, "mlb": 1}
 
 _SCORE_RE = re.compile(r"(\d+)\s*V\.?\s*S\.?\s*(\d+)", re.I)
 _DATE_RE = re.compile(r"(\d{2})/(\d{2})\s+AM\s+(\d{2}):(\d{2})")
@@ -202,6 +202,13 @@ class PlaySportScraper:
             if tm:
                 total_line = float(tm.group(2))
 
+            has_moneyline = False
+            su_td = tr.find("td", class_="td-bank-bet03")
+            if su_td:
+                su_team = su_td.get_text(strip=True)
+                if su_team and len(su_team) <= 20:
+                    has_moneyline = True
+
             rows_out.append(
                 {
                     "playsport_game_id": game_id,
@@ -217,6 +224,7 @@ class PlaySportScraper:
                     "spread_team": spread_team,
                     "spread_line": spread_line,
                     "total_line": total_line,
+                    "has_moneyline": has_moneyline,
                     "actual_total": int(total_points) if str(total_points).isdigit() else None,
                     "source": "playsport",
                 }
@@ -260,6 +268,10 @@ class PlaySportScraper:
                 line = float(row["total_line"])
                 db.insert_odds(gid, "total", "over", 1.75, handicap=line, bookmaker="playsport")
                 db.insert_odds(gid, "total", "under", 1.75, handicap=line, bookmaker="playsport")
+            if config.PLAYSPORT_MONEYLINE_ENABLED and row.get("has_moneyline"):
+                ml = config.TW_MONEYLINE_ODDS
+                db.upsert_odds(gid, "moneyline", "home", ml, bookmaker="playsport")
+                db.upsert_odds(gid, "moneyline", "away", ml, bookmaker="playsport")
 
         logger.info("playsport teamid=%s 寫入 %d 場", team_id, len(df))
         return df

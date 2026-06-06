@@ -47,6 +47,12 @@ class LiveSyncService:
             out["forecasts"] = len(forecasts)
 
             self.db.finalize_games_with_scores(sport)
+            if config.GAME_LEDGER_ENABLED:
+                from sportsbet.services.game_ledger import GameLedgerService
+
+                ledger = GameLedgerService(self.db).sync_sport(sport)
+                out["ledger_pre"] = ledger["pre"]
+                out["ledger_post"] = ledger["post"]
             now = date.today().isoformat()
             self.db.set_backtest_sync_meta(sport, "live_synced_at", now)
 

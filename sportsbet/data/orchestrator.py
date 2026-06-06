@@ -145,6 +145,13 @@ class DataOrchestrator:
         svc = PredictionService(self.db)
         forecasts = svc.run_upcoming(sport, days_ahead=days_ahead)
         out["forecasts"] = len(forecasts)
+        self.db.finalize_games_with_scores(sport)
+        if config.GAME_LEDGER_ENABLED:
+            from sportsbet.services.game_ledger import GameLedgerService
+
+            ledger = GameLedgerService(self.db).sync_sport(sport)
+            out["ledger_pre"] = ledger["pre"]
+            out["ledger_post"] = ledger["post"]
         self.db.set_backtest_sync_meta(sport, "daily_synced_at", today.isoformat())
         logger.info("daily sync sport=%s stats=%s", sport, out)
         return out

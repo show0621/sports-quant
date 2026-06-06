@@ -202,6 +202,20 @@ CREATE TABLE IF NOT EXISTS sync_health (
     synced_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_sync_health_sport ON sync_health(sport, sync_type, synced_at);
+
+CREATE TABLE IF NOT EXISTS game_ledger (
+    game_id INTEGER PRIMARY KEY,
+    sport TEXT NOT NULL,
+    match_date TEXT NOT NULL,
+    home_team TEXT NOT NULL,
+    away_team TEXT NOT NULL,
+    pre_captured_at TEXT,
+    pre_snapshot_json TEXT,
+    post_captured_at TEXT,
+    post_snapshot_json TEXT,
+    FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_game_ledger_date ON game_ledger(sport, match_date);
 """
 
 _MIGRATION_COLUMNS = [
@@ -1228,3 +1242,157 @@ class SportsDatabase:
                 out.add(str(row["match_date"])[:10])
 
         return sorted(d for d in out if start_s <= d <= end_s)
+
+    def get_games_for_ledger_pre(
+        self,
+        sport: Sport,
+        *,
+        start_date: str,
+    ) -> pd.DataFrame:
+        """尚未結束、需更新賽前快照的賽事。"""
+        finished = ("final", "FT", "AOT", "Finished", "POST")
+        placeholders = ",".join("?" for _ in finished)
+        with self.connection() as conn:
+            return pd.read_sql_query(
+                f"""
+                SELECT g.*
+                FROM games g
+                WHERE g.sport = ?
+                  AND g.match_date >= ?
+                  AND (g.status IS NULL OR g.status NOT IN ({placeholders}))
+                ORDER BY g.match_date, g.id
+                """,
+                conn,
+                params=(sport, start_date, *finished),
+            )
+
+    def get_games_for_ledger_post(
+        self,
+        sport: Sport,
+        *,
+        start_date: str,
+    ) -> pd.DataFrame:
+        """已結束但尚未寫入賽後快照的賽事。"""
+        with self.connection() as conn:
+            return pd.read_sql_query(
+                """
+                SELECT g.*
+                FROM games g
+                LEFT JOIN game_ledger l ON l.game_id = g.id
+                WHERE g.sport = ?
+                  AND g.match_date >= ?
+                  AND g.status = 'final'
+                  AND g.home_score IS NOT NULL
+                  AND g.away_score IS NOT NULL
+                  AND (g.home_score + g.away_score) > 0
+                  AND l.post_captured_at IS NULL
+                ORDER BY g.match_date, g.id
+                """,
+                conn,
+                params=(sport, start_date),
+            )
+
+    def get_game_odds(self, game_id: int) -> pd.DataFrame:
+        with self.connection() as conn:
+            return pd.read_sql_query(
+                "SELECT * FROM odds WHERE game_id = ? ORDER BY market, selection, created_at",
+                conn,
+                params=(game_id,),
+            )
+
+    def get_game_predictions(self, game_id: int) -> pd.DataFrame:
+        with self.connection() as conn:
+            return pd.read_sql_query(
+                "SELECT * FROM predictions WHERE game_id = ? ORDER BY market, selection",
+                conn,
+                params=(game_id,),
+            )
+
+    def get_game_forecast_row(self, game_id: int) -> pd.Series | None:
+        with self.connection() as conn:
+            df = pd.read_sql_query(
+                "SELECT * FROM game_forecasts WHERE game_id = ?",
+                conn,
+                params=(game_id,),
+            )
+        if df.empty:
+            return None
+        return df.iloc[0]
+
+    def get_team_player_stats(self, sport: Sport, team: str) -> pd.DataFrame:
+        with self.connection() as conn:
+            return pd.read_sql_query(
+                """
+                SELECT p.player_id, p.name, p.position, s.*
+                FROM players p
+                LEFT JOIN player_advanced_stats s
+                    ON s.sport = p.sport AND s.player_id = p.player_id
+                WHERE p.sport = ? AND p.team = ?
+                ORDER BY (s.war IS NULL), s.war DESC, p.name
+                """,
+                conn,
+                params=(sport, team),
+            )
+
+    def get_team_injuries(self, sport: Sport, team: str, report_date: str) -> pd.DataFrame:
+        with self.connection() as conn:
+            return pd.read_sql_query(
+                """
+                SELECT i.*, p.name
+                FROM injury_reports i
+                JOIN players p ON p.sport = i.sport AND p.player_id = i.player_id
+                WHERE i.sport = ? AND i.team = ? AND i.report_date <= ?
+                ORDER BY i.report_date DESC
+                LIMIT 30
+                """,
+                conn,
+                params=(sport, team, report_date),
+            )
+
+    def upsert_game_ledger_pre(
+        self,
+        game_id: int,
+        sport: Sport,
+        match_date: str,
+        home_team: str,
+        away_team: str,
+        snapshot_json: str,
+    ) -> None:
+        now = datetime.now().isoformat(timespec="seconds")
+        with self.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO game_ledger
+                    (game_id, sport, match_date, home_team, away_team,
+                     pre_captured_at, pre_snapshot_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(game_id) DO UPDATE SET
+                    pre_captured_at = excluded.pre_captured_at,
+                    pre_snapshot_json = excluded.pre_snapshot_json
+                """,
+                (game_id, sport, match_date, home_team, away_team, now, snapshot_json),
+            )
+
+    def upsert_game_ledger_post(
+        self,
+        game_id: int,
+        sport: Sport,
+        match_date: str,
+        home_team: str,
+        away_team: str,
+        snapshot_json: str,
+    ) -> None:
+        now = datetime.now().isoformat(timespec="seconds")
+        with self.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO game_ledger
+                    (game_id, sport, match_date, home_team, away_team,
+                     post_captured_at, post_snapshot_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(game_id) DO UPDATE SET
+                    post_captured_at = excluded.post_captured_at,
+                    post_snapshot_json = excluded.post_snapshot_json
+                """,
+                (game_id, sport, match_date, home_team, away_team, now, snapshot_json),
+            )

@@ -39,22 +39,22 @@ python scripts/validate_model.py
 streamlit run dashboard.py
 ```
 
-### 歷史 moneyline（JBot，必填才有回測 EV）
+### 歷史 moneyline（三種來源，擇一即可）
 
-1. 至 [sportsbot.tech/trial](https://sportsbot.tech/trial) 申請 API 密鑰
-2. 本機設定（不會 commit）：
-
-```powershell
-python scripts/setup_jbot_token.py YOUR_JBOT_TOKEN
-python scripts/sync_jbot_moneyline.py --sport all --days 14 --rebuild
-python main.py push-db
-```
-
-3. Streamlit Cloud → **Settings → Secrets** 加入 `JBOT_TOKEN = "..."`
+| 來源 | 需要金鑰 | 說明 |
+|------|----------|------|
+| **玩運彩爬蟲**（預設） | 否 | 從 `td-bank-bet03` 不讓分欄位 + 台灣運彩固定賠率 1.75 |
+| **運彩 Blob** | 否 | 即時/受注盤口（含浮動 moneyline），需 `watch` 每日累積 |
+| **JBot API** | 是 | 歷史浮動賠率最完整，[申請試用](https://sportsbot.tech/trial) |
 
 ```powershell
-# 或透過 backtest 流程自動同步 JBot
+# 方案 A：玩運彩（免費，已預設啟用 PLAYSPORT_MONEYLINE_ENABLED=true）
 python main.py sync --mode backtest --sport nba
+python scripts/backfill_playsport_moneyline.py --sport all --rebuild
+
+# 方案 B：JBot（有密鑰時）
+python scripts/setup_jbot_token.py YOUR_TOKEN
+python scripts/sync_jbot_moneyline.py --sport all --days 14 --rebuild
 ```
 
 ## 資料來源

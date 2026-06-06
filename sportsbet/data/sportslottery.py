@@ -204,7 +204,13 @@ class SportLotteryClient:
         return self._unwrap_events(self._get_json("Live/On.json"))
 
     def fetch_register_raw(self) -> list[dict[str, Any]]:
-        return self._unwrap_events(self._get_json("Register/On.json"))
+        try:
+            return self._unwrap_events(self._get_json("Register/On.json"))
+        except requests.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 404:
+                logger.debug("Register/On.json 不可用（404），僅使用 Live")
+                return []
+            raise
 
     def parse_events(
         self,

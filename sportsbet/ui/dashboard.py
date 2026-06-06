@@ -280,7 +280,11 @@ def page_model_health(sport: str) -> None:
 
     df_ml = df[df["market"] == "moneyline"] if "market" in df.columns else df
     if df_ml.empty:
-        st.warning("尚無 moneyline 賠率，請執行 backtest sync 或設定 JBOT_TOKEN。")
+        st.warning(
+            "尚無 moneyline 賠率。請執行 `python main.py sync --mode backtest --sport "
+            + sport
+            + "`（玩運彩爬蟲）或設定 JBOT_TOKEN。"
+        )
         return
 
     df_ml = df_ml.copy()
@@ -383,7 +387,10 @@ def page_bankroll(sport: str) -> None:
 
     df_ml = df[df["market"] == "moneyline"].copy() if "market" in df.columns else df.copy()
     if df_ml.empty:
-        st.warning("尚無 moneyline 賠率，請執行 backtest sync 或設定 JBOT_TOKEN。")
+        st.warning(
+            "尚無 moneyline 賠率。請執行 `python scripts/backfill_playsport_moneyline.py --rebuild` "
+            "或 backtest sync。"
+        )
         return
 
     df_ml["model_prob"] = df_ml["model_prob"].astype(float).clip(0.0, 1.0)
@@ -440,8 +447,10 @@ def main() -> None:
         st.sidebar.caption(f"{'✅' if quality.get(key) else '⬜'} {label}")
     if config.jbot_configured():
         st.sidebar.success("JBot 歷史盤口已設定")
+    elif config.PLAYSPORT_MONEYLINE_ENABLED:
+        st.sidebar.info("Moneyline：玩運彩固定賠率（無 JBot）")
     else:
-        st.sidebar.info("未設定 JBOT_TOKEN · moneyline 回測需 JBot")
+        st.sidebar.info("未設定盤口來源")
     if api_key_configured():
         st.sidebar.success("API-Sports 金鑰已設定（作為備援）")
     else:
