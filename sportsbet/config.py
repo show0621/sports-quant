@@ -138,6 +138,9 @@ CONTEXT_B2B_PENALTY = float(os.getenv("CONTEXT_B2B_PENALTY", "0.04"))
 CONTEXT_REST_BONUS = float(os.getenv("CONTEXT_REST_BONUS", "0.02"))
 CONTEXT_SPLIT_WEIGHT = float(os.getenv("CONTEXT_SPLIT_WEIGHT", "0.15"))
 CONTEXT_H2H_WEIGHT = float(os.getenv("CONTEXT_H2H_WEIGHT", "0.10"))
+USE_MONTE_CARLO = os.getenv("USE_MONTE_CARLO", "true").lower() == "true"
+MC_N_SIMS = int(os.getenv("MC_N_SIMS", "8000"))
+MC_H2H_LAMBDA_BLEND = float(os.getenv("MC_H2H_LAMBDA_BLEND", "0.25"))
 MARKOV_B2B_EDGE = float(os.getenv("MARKOV_B2B_EDGE", "0.03"))
 MARKOV_REST_EDGE_PER_DAY = float(os.getenv("MARKOV_REST_EDGE_PER_DAY", "0.005"))
 

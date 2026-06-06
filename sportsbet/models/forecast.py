@@ -65,6 +65,8 @@ class GameForecast:
     away_missing: list[dict[str, Any]] | None = None
     season_type: str | None = None
     competition_note: str | None = None
+    sim_result: Any | None = None  # MonteCarloResult when enabled
+    prob_breakdown: Any | None = None  # ProbabilityBreakdown from ensemble engine
 
     def to_db_row(self) -> dict[str, Any]:
         row = {
@@ -233,6 +235,7 @@ def build_game_forecast(
     away_prob = away_prob_base
 
     home_adj = away_adj = home_pen = away_pen = None
+    home_base = away_base = None
     home_miss: list[dict[str, Any]] = []
     away_miss: list[dict[str, Any]] = []
 
@@ -249,6 +252,8 @@ def build_game_forecast(
             away_prob = rr["away_win_prob"]
             home_adj = rr["home"].adjusted_rating
             away_adj = rr["away"].adjusted_rating
+            home_base = rr["home"].baseline_rating
+            away_base = rr["away"].baseline_rating
             home_pen = rr["home"].injury_penalty
             away_pen = rr["away"].injury_penalty
             home_miss = [
@@ -261,6 +266,43 @@ def build_game_forecast(
             ]
 
     lam_h, lam_a = engine.expected_score_lambdas(home_rs, home_ra, away_rs, away_ra)
+
+    if db is not None:
+        from sportsbet.models.matchup_simulator import (
+            adjust_lambdas_from_roster,
+            blend_lambdas_with_h2h,
+        )
+
+        lam_h, lam_a = blend_lambdas_with_h2h(
+            db, sport, home_team, away_team, match_date, lam_h, lam_a,
+            blend=config.MC_H2H_LAMBDA_BLEND,
+        )
+        if home_adj is not None and away_adj is not None:
+            lam_h, lam_a = adjust_lambdas_from_roster(
+                lam_h, lam_a,
+                home_adjusted=home_adj,
+                away_adjusted=away_adj,
+                home_baseline=home_base,
+                away_baseline=away_base,
+            )
+
+    spread_home_line = None
+    if db is not None and game_id and hasattr(db, "get_market_line"):
+        spread_home_line = db.get_market_line(game_id, "spread")
+
+    sim_result = None
+    if config.USE_MONTE_CARLO:
+        from sportsbet.models.matchup_simulator import simulate_matchup
+
+        sim_result = simulate_matchup(
+            lam_h, lam_a,
+            sport=sport,
+            total_line=total_line,
+            spread_home=spread_home_line,
+            home_win_anchor=home_prob,
+            n_sims=config.MC_N_SIMS,
+        )
+
     pred_home = round(lam_h, 1)
     pred_away = round(lam_a, 1)
     pred_total = round(lam_h + lam_a, 1)
@@ -279,6 +321,13 @@ def build_game_forecast(
             prob_o = engine.prob_total_over(market_line, lam_h, lam_a)
             prob_u = 1.0 - prob_o
 
+    if sim_result is not None:
+        if sim_result.prob_over is not None:
+            prob_o = sim_result.prob_over
+            prob_u = sim_result.prob_under
+        home_prob = 0.65 * home_prob + 0.35 * sim_result.home_win_prob
+        away_prob = 1.0 - home_prob
+
     winner = home_team if home_prob >= away_prob else away_team
     unit = "分" if sport == "nba" else "分"
     margin_note = (
@@ -293,6 +342,8 @@ def build_game_forecast(
     else:
         label = "大小分" if sport == "nba" else "大小"
         margin_note += f" · {label}線 {market_line} · 預估總得 {pred_total:.1f}"
+    if sim_result is not None:
+        margin_note += f" · {sim_result.summary_line(sport=sport)}"
 
     actual_winner = None
     pick_correct = None
@@ -356,6 +407,8 @@ def build_game_forecast(
         away_missing=away_miss or None,
         season_type=season_type,
         competition_note=competition_note,
+        sim_result=sim_result,
+        prob_breakdown=prob_breakdown,
     )
 
 

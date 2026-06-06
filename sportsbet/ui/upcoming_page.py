@@ -106,6 +106,37 @@ def _render_forecast_card(
         c7.metric("小分機率" if sport == "nba" else "小機率", _pct(fc.prob_under))
         st.caption(fc.margin_note)
 
+        sim = getattr(fc, "sim_result", None)
+        if sim is not None:
+            st.markdown("**動態 MC 模擬（PK / 大小 / 讓分）**")
+            sc1, sc2, sc3, sc4 = st.columns(4)
+            sc1.metric("MC 主勝", _pct(sim.home_win_prob))
+            sc2.metric("MC 大分" if sport == "nba" else "MC 大", _pct(sim.prob_over))
+            sc3.metric("MC 主讓分過盤", _pct(sim.prob_home_cover))
+            sc4.metric("MC 中位總分", f"{sim.median_total:.0f}")
+            st.caption(
+                f"總分 P10–P90：{sim.p10_total:.0f}–{sim.p90_total:.0f} · "
+                f"中位比分 {sim.median_away_score:.0f}–{sim.median_home_score:.0f} · "
+                f"{sim.n_sims} 次模擬"
+            )
+
+        pb = getattr(fc, "prob_breakdown", None)
+        if pb is not None:
+            with st.expander("集成勝率分解（Log5 / 貝氏 / Beta / 馬可夫 / 情境）"):
+                st.dataframe(
+                    pd.DataFrame(
+                        [
+                            {"模型": "Log5", "主": _pct(pb.log5_home), "客": _pct(pb.log5_away)},
+                            {"模型": "貝氏近況", "主": _pct(pb.bayesian_home), "客": _pct(pb.bayesian_away)},
+                            {"模型": "Beta-Binomial", "主": _pct(pb.beta_home), "客": _pct(pb.beta_away)},
+                            {"模型": "馬可夫", "主": _pct(pb.markov_home), "客": _pct(pb.markov_away)},
+                            {"模型": "集成最終", "主": _pct(pb.final_home), "客": _pct(pb.final_away)},
+                        ]
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
         ic1, ic2 = st.columns(2)
         with ic1:
             _render_injury_impact(fc, "home")
