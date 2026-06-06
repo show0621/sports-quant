@@ -63,6 +63,8 @@ class GameForecast:
     away_injury_penalty: float | None = None
     home_missing: list[dict[str, Any]] | None = None
     away_missing: list[dict[str, Any]] | None = None
+    season_type: str | None = None
+    competition_note: str | None = None
 
     def to_db_row(self) -> dict[str, Any]:
         row = {
@@ -166,6 +168,8 @@ def build_game_forecast(
     actual_away_score: int | None = None,
     db: Any | None = None,
     use_roster: bool = True,
+    season_type: str | None = None,
+    competition_note: str | None = None,
 ) -> GameForecast:
     """產生單場完整預測（含各隊畢達哥拉斯、賽季勝率、貝氏後驗）。"""
     home_pyth = engine.team_win_pct(home_rs, home_ra, home_games)
@@ -257,21 +261,32 @@ def build_game_forecast(
     pred_margin = round(lam_h - lam_a, 1)
 
     if sport == "nba":
-        default_line = total_line if total_line is not None else 220.5
+        market_line = total_line
+        prob_o = prob_u = None
+        if market_line is not None:
+            prob_o = engine.prob_total_over(market_line, lam_h, lam_a)
+            prob_u = 1.0 - prob_o
     else:
-        default_line = total_line if total_line is not None else 8.5
-
-    prob_o = engine.prob_total_over(default_line, lam_h, lam_a)
-    prob_u = 1.0 - prob_o
+        market_line = total_line
+        prob_o = prob_u = None
+        if market_line is not None:
+            prob_o = engine.prob_total_over(market_line, lam_h, lam_a)
+            prob_u = 1.0 - prob_o
 
     winner = home_team if home_prob >= away_prob else away_team
+    unit = "分" if sport == "nba" else "分"
     margin_note = (
-        f"主隊預估淨勝 {pred_margin:+.1f} 分"
+        f"主隊預估淨勝 {pred_margin:+.1f} {unit}"
         if pred_margin > 0
-        else f"客隊預估淨勝 {-pred_margin:.1f} 分"
+        else f"客隊預估淨勝 {-pred_margin:.1f} {unit}"
         if pred_margin < 0
         else "預估平手"
     )
+    if market_line is None:
+        margin_note += f" · 預估總得 {pred_total:.1f}（無大小盤口）"
+    else:
+        label = "大小分" if sport == "nba" else "大小"
+        margin_note += f" · {label}線 {market_line} · 預估總得 {pred_total:.1f}"
 
     actual_winner = None
     pick_correct = None
@@ -314,7 +329,7 @@ def build_game_forecast(
         predicted_away_score=pred_away,
         predicted_total=pred_total,
         predicted_margin=pred_margin,
-        total_line=default_line,
+        total_line=market_line,
         prob_over=prob_o,
         prob_under=prob_u,
         margin_note=margin_note,
@@ -333,6 +348,8 @@ def build_game_forecast(
         away_injury_penalty=away_pen,
         home_missing=home_miss or None,
         away_missing=away_miss or None,
+        season_type=season_type,
+        competition_note=competition_note,
     )
 
 

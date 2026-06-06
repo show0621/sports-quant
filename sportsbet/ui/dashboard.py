@@ -30,9 +30,13 @@ from sportsbet.risk.ev import RiskManager  # noqa: E402
 from sportsbet.services.data_refresh import run_full_backtest_refresh, run_incremental_backtest_refresh  # noqa: E402
 from sportsbet.services.prediction_service import PredictionService  # noqa: E402
 from sportsbet.ui.live_monitor_page import page_live_monitor  # noqa: E402
+from sportsbet.ui.live_scoreboard import render_live_scoreboard  # noqa: E402
+from sportsbet.ui.theme import inject_dashboard_theme  # noqa: E402
 from sportsbet.ui.hot_cold_page import page_player_hot_cold  # noqa: E402
 from sportsbet.ui.injury_ticker import render_injury_ticker  # noqa: E402
 from sportsbet.ui.upcoming_page import page_current_future_predictions  # noqa: E402
+from sportsbet.data.team_names import team_bilingual  # noqa: E402
+from sportsbet.ui.odds_display import _fmt_odds  # noqa: E402
 
 st.set_page_config(page_title="運彩量化看板", layout="wide", page_icon="📊")
 
@@ -71,11 +75,19 @@ def ensure_data(sport: str) -> None:
 
 
 def build_daily_predictions(sport: str) -> pd.DataFrame:
+    from sportsbet.ui.matchup_display import taipei_match_date
+
     db = get_db()
     svc = get_prediction_service()
     risk = RiskManager()
     today = date.today().isoformat()
     board = db.get_daily_board(sport, today)
+    if board.empty:
+        for offset in (-1, 1):
+            alt = (date.today() + timedelta(days=offset)).isoformat()
+            board = db.get_daily_board(sport, alt)
+            if not board.empty:
+                break
     if board.empty:
         return pd.DataFrame()
 
@@ -130,9 +142,21 @@ def build_daily_predictions(sport: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _team_label(name: str, sport: str) -> str:
+    en, zh = team_bilingual(name, sport)
+    return f"{en} / {zh}" if zh else en
+
+
+def _fmt_spread_line(v: float | None) -> str:
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return "—"
+    return f"{float(v):+.1f}"
+
+
 def page_backtest_review(sport: str) -> None:
     st.header("回測覆盤（歷史賽事）")
     st.caption(
+        f"僅顯示 **{sport.upper()}** 賽事（已過濾跨球種污染）· "
         f"預設回測區間：過去 {config.BACKTEST_YEARS} 年（{config.BACKTEST_DAYS} 天）。"
         f"已結束賽事覆盤會寫入資料庫；之後只補最近 {config.BACKTEST_INCREMENTAL_LOOKBACK_DAYS} 天與缺漏日期。"
         "現在/未來預測請至「賽事預測」分頁。"
@@ -157,20 +181,53 @@ def page_backtest_review(sport: str) -> None:
         st.warning("尚無已結束賽事的覆盤資料，請先載入歷史賽果或按上方按鈕產生。")
         return
 
+    unit = "分" if sport == "nba" else "分"
+    total_label = "大小分" if sport == "nba" else "大小分（總得分）"
+    if "has_total_odds" in review.columns:
+        with_total = int((review["has_total_odds"] > 0).sum())
+        with_ml = int((review["has_ml_odds"] > 0).sum()) if "has_ml_odds" in review.columns else 0
+        with_sp = int((review["has_spread_odds"] > 0).sum()) if "has_spread_odds" in review.columns else 0
+        full_odds = 0
+        if {"has_total_odds", "has_ml_odds", "has_spread_odds"}.issubset(review.columns):
+            full_odds = int(
+                ((review["has_total_odds"] > 0) & (review["has_ml_odds"] > 0) & (review["has_spread_odds"] > 0)).sum()
+            )
+        st.caption(
+            f"運動：**{sport.upper()}** · 共 {len(review)} 場 · "
+            f"勝負盤 {with_ml} · 讓分（勝分差）{with_sp} · {total_label} {with_total} · "
+            f"三項齊全 {full_odds} 場"
+        )
+        if with_total == 0 or with_ml == 0 or with_sp == 0:
+            missing = []
+            if with_ml == 0:
+                missing.append("勝負")
+            if with_sp == 0:
+                missing.append("讓分（勝分差）")
+            if with_total == 0:
+                missing.append(total_label)
+            st.warning(
+                f"部分場次缺少 {' / '.join(missing)} 賠率。"
+                "請執行 `python scripts/repair_data.py --sport "
+                f"{sport}` 或側欄「完整同步」以還原玩運彩 / 台灣運彩盤口。"
+            )
+
     hits = review["pick_correct"].sum()
     total = len(review)
     c1, c2, c3 = st.columns(3)
     c1.metric("勝負預測命中", f"{hits}/{total}", f"{hits/total:.1%}" if total else "—")
     if "margin_error" in review.columns:
-        c2.metric("平均分差誤差", f"{review['margin_error'].abs().mean():.1f} 分")
+        c2.metric("平均分差誤差", f"{review['margin_error'].abs().mean():.1f} {unit}")
     if "total_error" in review.columns:
-        c3.metric("平均總分誤差", f"{review['total_error'].abs().mean():.1f} 分")
+        c3.metric("平均總分誤差", f"{review['total_error'].abs().mean():.1f} {unit}")
 
-    display = review.rename(
+    display = review.copy()
+    display["主隊"] = display["home_team"].map(lambda x: _team_label(x, sport))
+    display["客隊"] = display["away_team"].map(lambda x: _team_label(x, sport))
+    if "odds_total_line" in display.columns:
+        display["大小分線(盤口)"] = display["odds_total_line"].combine_first(display.get("total_line"))
+    display = display.rename(
         columns={
             "match_date": "日期",
-            "home_team": "主隊",
-            "away_team": "客隊",
             "predicted_winner": "預測勝者",
             "actual_winner": "實際勝者",
             "home_win_prob": "主隊勝率(最終)",
@@ -187,12 +244,21 @@ def page_backtest_review(sport: str) -> None:
             "predicted_margin": "預測分差",
             "margin_error": "分差誤差",
             "total_error": "總分誤差",
-            "prob_over": "大分機率",
-            "total_line": "大小分線",
+            "prob_over": "大" + ("分" if sport == "nba" else "") + "機率",
+            "total_line": total_label + "線(模型)",
+            "ml_home_odds": "主勝賠率",
+            "ml_away_odds": "客勝賠率",
+            "spread_home_line": "主讓分線",
+            "spread_home_odds": "主讓分賠率",
+            "spread_away_line": "客讓分線",
+            "spread_away_odds": "客讓分賠率",
+            "over_odds": "大分賠率",
+            "under_odds": "小分賠率",
         }
     )
     pct_cols = [
-        "主隊勝率(最終)", "客隊勝率(最終)", "主隊勝率(傷兵前)", "客隊勝率(傷兵前)", "大分機率",
+        "主隊勝率(最終)", "客隊勝率(最終)", "主隊勝率(傷兵前)", "客隊勝率(傷兵前)",
+        "大分機率" if sport == "nba" else "大機率",
     ]
     adj_cols = ["主隊傷兵修正", "客隊傷兵修正"]
     for col in pct_cols:
@@ -202,14 +268,30 @@ def page_backtest_review(sport: str) -> None:
         if col in display.columns:
             display[col] = display[col].map(lambda x: f"{float(x)*100:+.1f}%" if pd.notna(x) else "—")
 
+    odds_cols = ["主勝賠率", "客勝賠率", "主讓分賠率", "客讓分賠率", "大分賠率", "小分賠率"]
+    for col in odds_cols:
+        if col in display.columns:
+            display[col] = display[col].map(_fmt_odds)
+    for col in ["主讓分線", "客讓分線"]:
+        if col in display.columns:
+            display[col] = display[col].map(_fmt_spread_line)
+    if "大小分線(盤口)" in display.columns:
+        display["大小分線(盤口)"] = display["大小分線(盤口)"].map(
+            lambda x: f"{float(x):.1f}" if pd.notna(x) and x is not None else "—"
+        )
+
     show_cols = [
         c
         for c in [
             "日期", "主隊", "客隊", "預測勝者", "實際勝者", "預測正確",
+            "主勝賠率", "客勝賠率",
+            "主讓分線", "主讓分賠率", "客讓分線", "客讓分賠率",
+            "大小分線(盤口)", "大分賠率", "小分賠率",
             "主隊勝率(傷兵前)", "主隊傷兵修正", "主隊勝率(最終)",
             "客隊勝率(傷兵前)", "客隊傷兵修正", "客隊勝率(最終)",
             "預測主隊分", "預測客隊分", "實際主隊分", "實際客隊分",
-            "預測總分", "預測分差", "分差誤差", "總分誤差", "大小分線", "大分機率",
+            "預測總分", "預測分差", "分差誤差", "總分誤差",
+            total_label + "線(模型)", "大分機率" if sport == "nba" else "大機率",
         ]
         if c in display.columns
     ]
@@ -423,6 +505,7 @@ def page_bankroll(sport: str) -> None:
 
 
 def main() -> None:
+    inject_dashboard_theme()
     st.sidebar.title("運彩量化看板")
     sport = st.sidebar.selectbox("運動", ["nba", "mlb"])
     st.session_state.setdefault("last_api_error", "")
@@ -497,6 +580,8 @@ def main() -> None:
         ["即時監控", "賽事預測", "回測覆盤", "球員熱區", "投注訊號", "模型健康度", "資金回測"]
     )
     with tab0:
+        render_live_scoreboard(get_db(), sport)
+        st.divider()
         page_live_monitor(get_db(), sport, get_prediction_service())
     with tab1:
         page_current_future_predictions(sport, get_prediction_service())

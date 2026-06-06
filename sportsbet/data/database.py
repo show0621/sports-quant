@@ -229,6 +229,11 @@ _MIGRATION_COLUMNS = [
     ("game_forecasts", "away_win_prob_base", "REAL"),
     ("game_forecasts", "home_injury_adj", "REAL"),
     ("game_forecasts", "away_injury_adj", "REAL"),
+    ("games", "season_type", "TEXT"),
+    ("games", "competition_note", "TEXT"),
+    ("games", "period", "INTEGER"),
+    ("games", "clock", "TEXT"),
+    ("games", "status_detail", "TEXT"),
 ]
 
 
@@ -280,6 +285,11 @@ class SportsDatabase:
         status: str = "scheduled",
         home_logo_url: str | None = None,
         away_logo_url: str | None = None,
+        season_type: str | None = None,
+        competition_note: str | None = None,
+        period: int | None = None,
+        clock: str | None = None,
+        status_detail: str | None = None,
     ) -> int:
         from sportsbet.data.team_names import is_cross_sport_game
 
@@ -291,19 +301,26 @@ class SportsDatabase:
             cur = conn.execute(
                 """
                 INSERT INTO games (sport, match_date, match_datetime, home_team, away_team,
-                                   home_score, away_score, status, home_logo_url, away_logo_url)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                   home_score, away_score, status, home_logo_url, away_logo_url,
+                                   season_type, competition_note, period, clock, status_detail)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(sport, match_date, home_team, away_team) DO UPDATE SET
                     match_datetime=excluded.match_datetime,
                     home_score=COALESCE(excluded.home_score, games.home_score),
                     away_score=COALESCE(excluded.away_score, games.away_score),
                     status=excluded.status,
                     home_logo_url=COALESCE(excluded.home_logo_url, games.home_logo_url),
-                    away_logo_url=COALESCE(excluded.away_logo_url, games.away_logo_url)
+                    away_logo_url=COALESCE(excluded.away_logo_url, games.away_logo_url),
+                    season_type=COALESCE(excluded.season_type, games.season_type),
+                    competition_note=COALESCE(excluded.competition_note, games.competition_note),
+                    period=COALESCE(excluded.period, games.period),
+                    clock=COALESCE(excluded.clock, games.clock),
+                    status_detail=COALESCE(excluded.status_detail, games.status_detail)
                 """,
                 (
                     sport, match_date, match_datetime, home_team, away_team,
                     home_score, away_score, status, home_logo_url, away_logo_url,
+                    season_type, competition_note, period, clock, status_detail,
                 ),
             )
             if cur.lastrowid:
@@ -657,7 +674,11 @@ class SportsDatabase:
 
     def get_forecast_review(self, sport: Sport, *, final_only: bool = True) -> pd.DataFrame:
         sql = """
-            SELECT f.match_date, f.home_team, f.away_team, f.status,
+            SELECT f.game_id,
+                   f.match_date,
+                   g.home_team AS home_team,
+                   g.away_team AS away_team,
+                   f.status,
                    f.predicted_winner, f.actual_winner, f.pick_correct,
                    f.home_win_prob, f.away_win_prob,
                    f.home_win_prob_base, f.away_win_prob_base,
@@ -670,12 +691,35 @@ class SportsDatabase:
                    f.predicted_home_score, f.predicted_away_score, f.predicted_total,
                    f.actual_home_score, f.actual_away_score,
                    f.predicted_margin, f.margin_error, f.total_error,
-                   f.total_line, f.prob_over, f.prob_under, f.margin_note
+                   f.total_line, f.prob_over, f.prob_under, f.margin_note,
+                   g.season_type, g.competition_note,
+                   (SELECT COUNT(*) FROM odds o WHERE o.game_id = g.id AND o.market = 'total') AS has_total_odds,
+                   (SELECT COUNT(*) FROM odds o WHERE o.game_id = g.id AND o.market = 'moneyline') AS has_ml_odds,
+                   (SELECT COUNT(*) FROM odds o WHERE o.game_id = g.id AND o.market = 'spread') AS has_spread_odds,
+                   (SELECT o.odds FROM odds o WHERE o.game_id = g.id AND o.market = 'moneyline'
+                    AND o.selection = 'home' ORDER BY o.id DESC LIMIT 1) AS ml_home_odds,
+                   (SELECT o.odds FROM odds o WHERE o.game_id = g.id AND o.market = 'moneyline'
+                    AND o.selection = 'away' ORDER BY o.id DESC LIMIT 1) AS ml_away_odds,
+                   (SELECT o.handicap FROM odds o WHERE o.game_id = g.id AND o.market = 'spread'
+                    AND o.selection = 'home' ORDER BY o.id DESC LIMIT 1) AS spread_home_line,
+                   (SELECT o.odds FROM odds o WHERE o.game_id = g.id AND o.market = 'spread'
+                    AND o.selection = 'home' ORDER BY o.id DESC LIMIT 1) AS spread_home_odds,
+                   (SELECT o.handicap FROM odds o WHERE o.game_id = g.id AND o.market = 'spread'
+                    AND o.selection = 'away' ORDER BY o.id DESC LIMIT 1) AS spread_away_line,
+                   (SELECT o.odds FROM odds o WHERE o.game_id = g.id AND o.market = 'spread'
+                    AND o.selection = 'away' ORDER BY o.id DESC LIMIT 1) AS spread_away_odds,
+                   (SELECT o.handicap FROM odds o WHERE o.game_id = g.id AND o.market = 'total'
+                    AND o.selection = 'over' ORDER BY o.id DESC LIMIT 1) AS odds_total_line,
+                   (SELECT o.odds FROM odds o WHERE o.game_id = g.id AND o.market = 'total'
+                    AND o.selection = 'over' ORDER BY o.id DESC LIMIT 1) AS over_odds,
+                   (SELECT o.odds FROM odds o WHERE o.game_id = g.id AND o.market = 'total'
+                    AND o.selection = 'under' ORDER BY o.id DESC LIMIT 1) AS under_odds
             FROM game_forecasts f
-            JOIN games g ON g.id = f.game_id AND g.sport = f.sport
+            INNER JOIN games g ON g.id = f.game_id AND g.sport = f.sport
             WHERE f.sport = ?
+              AND g.sport = ?
         """
-        params: list[Any] = [sport]
+        params: list[Any] = [sport, sport]
         if final_only:
             sql += " AND f.status = 'final' AND f.actual_winner IS NOT NULL"
         sql += " ORDER BY f.match_date DESC, f.id DESC"
@@ -941,7 +985,113 @@ class SportsDatabase:
                 removed += len(bad_ids)
         return removed
 
-    def clip_prediction_probabilities(self) -> int:
+    def purge_invalid_team_games(self, sport: Sport | None = None) -> int:
+        """刪除隊名不屬於該運動的污染賽事。"""
+        from sportsbet.data.team_names import is_cross_sport_game, team_belongs_to_sport
+
+        sports: tuple[Sport, ...] = (sport,) if sport else ("nba", "mlb")
+        removed = 0
+        with self.connection() as conn:
+            for sp in sports:
+                rows = conn.execute(
+                    "SELECT id, home_team, away_team FROM games WHERE sport = ?",
+                    (sp,),
+                ).fetchall()
+                bad_ids = [
+                    int(r["id"])
+                    for r in rows
+                    if is_cross_sport_game(sp, r["home_team"], r["away_team"])
+                    or not team_belongs_to_sport(r["home_team"], sp)
+                    or not team_belongs_to_sport(r["away_team"], sp)
+                ]
+                if not bad_ids:
+                    continue
+                ph = ",".join("?" for _ in bad_ids)
+                for table, col in (
+                    ("predictions", "game_id"),
+                    ("odds", "game_id"),
+                    ("game_forecasts", "game_id"),
+                    ("game_ledger", "game_id"),
+                ):
+                    conn.execute(f"DELETE FROM {table} WHERE {col} IN ({ph})", bad_ids)
+                conn.execute(f"DELETE FROM games WHERE id IN ({ph})", bad_ids)
+                removed += len(bad_ids)
+        return removed
+
+    def purge_invalid_forecasts(self, sport: Sport | None = None) -> int:
+        """刪除隊名與 sport 不符或與 games 表不一致的 forecast。"""
+        from sportsbet.data.team_names import is_cross_sport_game, team_belongs_to_sport
+
+        sports: tuple[Sport, ...] = (sport,) if sport else ("nba", "mlb")
+        removed = 0
+        with self.connection() as conn:
+            for sp in sports:
+                rows = conn.execute(
+                    """
+                    SELECT f.game_id, f.home_team, f.away_team,
+                           g.home_team AS g_home, g.away_team AS g_away, g.sport AS g_sport
+                    FROM game_forecasts f
+                    LEFT JOIN games g ON g.id = f.game_id
+                    WHERE f.sport = ?
+                    """,
+                    (sp,),
+                ).fetchall()
+                bad_ids: list[int] = []
+                for r in rows:
+                    gid = int(r["game_id"])
+                    if r["g_sport"] is None or r["g_sport"] != sp:
+                        bad_ids.append(gid)
+                        continue
+                    ht, at = r["home_team"], r["away_team"]
+                    if (
+                        is_cross_sport_game(sp, ht, at)
+                        or not team_belongs_to_sport(ht, sp)
+                        or not team_belongs_to_sport(at, sp)
+                        or ht != r["g_home"]
+                        or at != r["g_away"]
+                    ):
+                        bad_ids.append(gid)
+                bad_ids = list(dict.fromkeys(bad_ids))
+                if not bad_ids:
+                    continue
+                ph = ",".join("?" for _ in bad_ids)
+                conn.execute(f"DELETE FROM predictions WHERE game_id IN ({ph})", bad_ids)
+                conn.execute(f"DELETE FROM game_forecasts WHERE game_id IN ({ph})", bad_ids)
+                removed += len(bad_ids)
+        return removed
+
+    def get_market_line(self, game_id: int, market: str) -> float | None:
+        """取該場指定盤口線（優先最新一筆 over/home spread）。"""
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT handicap FROM odds
+                WHERE game_id = ? AND market = ? AND handicap IS NOT NULL
+                ORDER BY id DESC LIMIT 1
+                """,
+                (game_id, market),
+            ).fetchone()
+        if not row or row["handicap"] is None:
+            return None
+        return float(row["handicap"])
+
+    def get_live_games(self, sport: Sport) -> pd.DataFrame:
+        """進行中或今日已排程的賽事（台灣今日）。"""
+        today = date.today().isoformat()
+        with self.connection() as conn:
+            return pd.read_sql_query(
+                """
+                SELECT * FROM games
+                WHERE sport = ?
+                  AND match_date = ?
+                  AND (status = 'in_progress'
+                       OR (status = 'scheduled' AND match_datetime IS NOT NULL)
+                       OR status = 'final')
+                ORDER BY match_datetime, id
+                """,
+                conn,
+                params=(sport, today),
+            )
         """修正浮點誤差導致 model_prob 略大於 1 的紀錄。"""
         with self.connection() as conn:
             cur = conn.execute(

@@ -39,13 +39,21 @@ def sync_nba_season_to_database(
         raise RuntimeError("請安裝 nba_api：pip install nba_api") from exc
 
     logger.info("nba_api 同步賽季 %s", season_param)
-    time.sleep(pause_sec)
-    finder = leaguegamefinder.LeagueGameFinder(
-        season_nullable=season_param,
-        season_type_nullable="Regular Season",
-        league_id_nullable="00",
-    )
-    raw = finder.get_data_frames()[0]
+    frames = []
+    for season_type in ("Regular Season", "Playoffs"):
+        time.sleep(pause_sec)
+        finder = leaguegamefinder.LeagueGameFinder(
+            season_nullable=season_param,
+            season_type_nullable=season_type,
+            league_id_nullable="00",
+        )
+        df = finder.get_data_frames()[0]
+        if not df.empty:
+            frames.append(df)
+    if not frames:
+        logger.warning("nba_api 未回傳賽季 %s 資料", season_param)
+        return pd.DataFrame()
+    raw = pd.concat(frames, ignore_index=True).drop_duplicates(subset=["GAME_ID"], keep="last")
     if raw.empty:
         logger.warning("nba_api 未回傳賽季 %s 資料", season_param)
         return pd.DataFrame()

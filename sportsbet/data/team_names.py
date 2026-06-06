@@ -143,8 +143,10 @@ _SPORT_MAPS: dict[str, dict[str, str]] = {
 
 # 英文別名 → 標準英文名（API-Sports 可能略有差異）
 _EN_ALIASES: dict[str, str] = {
-    "LA Clippers": "Los Angeles Clippers",
+    "LA Clippers": "LA Clippers",
+    "Los Angeles Clippers": "LA Clippers",
     "LA Lakers": "Los Angeles Lakers",
+    "Los Angeles Lakers": "Los Angeles Lakers",
     "St. Louis Cardinals": "St.Louis Cardinals",
     "St Louis Cardinals": "St.Louis Cardinals",
 }
@@ -161,6 +163,26 @@ def _strip_noise(name: str) -> str:
     return s
 
 
+def _extract_playsport_embedded_team(raw: str, sport: str) -> str | None:
+    """玩運彩列：投手名/中文縮寫混寫 → 抽出隊名。"""
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    mapping = _SPORT_MAPS.get(sport.lower(), {})
+    m = re.search(r"\(([^)]+)\)", text)
+    if m:
+        key = _strip_noise(m.group(1))
+        if key in mapping:
+            return mapping[key]
+        alt = key.replace("隊", "")
+        if alt in mapping:
+            return mapping[alt]
+    for zh in sorted(mapping.keys(), key=len, reverse=True):
+        if text.startswith(zh):
+            return mapping[zh]
+    return None
+
+
 def normalize_team_name(name: str, sport: str) -> str:
     """
     將隊名正規化為 API-Sports 使用的英文名。
@@ -172,6 +194,9 @@ def normalize_team_name(name: str, sport: str) -> str:
         return ""
 
     raw = str(name).strip()
+    embedded = _extract_playsport_embedded_team(raw, sport)
+    if embedded and embedded in known_teams(sport):
+        return embedded
     key = _strip_noise(raw)
     mapping = _SPORT_MAPS.get(sport.lower(), {})
 
@@ -216,10 +241,25 @@ def build_reverse_map(sport: str) -> dict[str, str]:
     return rev
 
 
+def team_bilingual(team: str, sport: str) -> tuple[str, str]:
+    """回傳 (英文標準名, 中文全名)；缺中文時第二項為空字串。"""
+    en = normalize_team_name(team, sport)
+    rev = build_reverse_map(sport)
+    zh = rev.get(en, "")
+    if not zh and re.search(r"[\u4e00-\u9fff]", str(team)):
+        zh = str(team).strip()
+    return en, zh
+
+
 def known_teams(sport: str) -> set[str]:
-    """該運動的標準英文隊名集合。"""
+    """該運動的標準英文隊名集合（不含其他球種別名）。"""
     m = _SPORT_MAPS.get(sport.lower(), {})
-    return set(m.values()) | {v for v in _EN_ALIASES.values()}
+    base = set(m.values())
+    for alias, canonical in _EN_ALIASES.items():
+        if canonical in base:
+            base.add(alias)
+            base.add(canonical)
+    return base
 
 
 NBA_TEAMS = known_teams("nba")
@@ -227,15 +267,33 @@ MLB_TEAMS = known_teams("mlb")
 
 
 def _looks_like_playsport_pitcher_row(name: str) -> bool:
-    """玩運彩誤植：投手名當隊名（例：Lambert (洋基)）。"""
+    """玩運彩誤植：投手名當隊名（例：Lambert (洋基) 或 洋基Zack Wheeler）。"""
     raw = str(name or "").strip()
-    return bool(raw) and "(" in raw
+    if not raw:
+        return False
+    if "(" in raw:
+        return True
+    # 中文隊名縮寫 + 英文投手名（無空格）
+    if re.search(r"[\u4e00-\u9fff].*[A-Za-z]{3,}", raw):
+        mlb_short = set(MLB_ZH_TO_EN.keys())
+        for zh in sorted(mlb_short, key=len, reverse=True):
+            if raw.startswith(zh) and len(raw) > len(zh) + 2:
+                rest = raw[len(zh) :].strip()
+                if rest and rest[0].isupper():
+                    return True
+    return False
 
 
 def team_belongs_to_sport(team: str, sport: str) -> bool:
     """隊名是否屬於指定運動（含正規化後比對）。"""
     if not team:
         return False
+    if _looks_like_playsport_pitcher_row(team):
+        embedded = _extract_playsport_embedded_team(team, sport)
+        if embedded:
+            team = embedded
+        else:
+            return False
     canonical = normalize_team_name(team, sport)
     known = known_teams(sport)
     if canonical in known:

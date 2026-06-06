@@ -161,6 +161,11 @@ class PlaySportScraper:
             else:
                 away_team, home_team = loser_team, winner_team
 
+            from sportsbet.data.team_names import team_belongs_to_sport
+
+            if not team_belongs_to_sport(home_team, sport) or not team_belongs_to_sport(away_team, sport):
+                continue
+
             month, day = int(dm.group(1)), int(dm.group(2))
             hour, minute = int(dm.group(3)), int(dm.group(4))
             year = _infer_year(month, day, range_end)

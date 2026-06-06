@@ -31,12 +31,26 @@ class LiveSyncService:
         t0 = time.perf_counter()
         out: dict[str, int | str] = {}
         try:
+            self.db.purge_invalid_team_games(sport)
+            self.db.purge_cross_sport_games(sport)
+
+            if self.db.get_team_stats(sport).empty:
+                from sportsbet.data.api_sports import calendar_season
+
+                self.orch.provider.fetch_historical_stats(
+                    sport, calendar_season(sport), incremental=True,
+                )
+
             days = config.LIVE_SYNC_DAYS_AHEAD
             today = date.today()
+            from sportsbet.data.espn_schedule import EspnScheduleClient
+
+            EspnScheduleClient().sync_window_to_database(
+                self.db, sport, center=today, days_before=1, days_after=days,
+            )
 
             for offset in range(days + 1):
                 d = (today + timedelta(days=offset)).isoformat()
-                self.orch.provider.fetch_daily_schedule(sport, d)
                 self.orch.provider.fetch_odds(sport, d, replace=True)
 
             player_stats = self.orch.sync_players(sport, days_lineup=days, force=False)

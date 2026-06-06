@@ -51,6 +51,7 @@ def prepare_backtest_odds(
         out["playsport_moneyline"] = backfill_playsport_moneyline(db, sport)
         if out["playsport_moneyline"] > 0:
             out["moneyline_predictions"] = rebuild_moneyline_predictions(db, sport)
+        out["market_predictions"] = rebuild_predictions_from_forecasts(db, sport)
     else:
         out["moneyline_backfill"] = backfill_tw_moneyline_odds(db, sport)
     return out
