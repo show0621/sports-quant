@@ -20,7 +20,7 @@ if str(ROOT) not in sys.path:
 
 from sportsbet import config  # noqa: E402
 from sportsbet.data.database import SportsDatabase  # noqa: E402
-from sportsbet.data.db_github_sync import push_database_to_github  # noqa: E402
+from sportsbet.data.db_github_sync import DbPushResult, persist_database_after_sync  # noqa: E402
 from sportsbet.data.data_quality import data_quality_detail  # noqa: E402
 from sportsbet.data.orchestrator import DataOrchestrator  # noqa: E402
 from sportsbet.data.provider import api_key_configured, describe_data_source  # noqa: E402
@@ -61,17 +61,44 @@ def get_prediction_service(_cache_version: int = _DB_CACHE_VERSION) -> Predictio
     return PredictionService(get_db(_cache_version))
 
 
-def _persist_database(message: str | None = None) -> None:
-    """資料變更後嘗試推送 SQLite 至 GitHub。"""
+def _persist_database(message: str | None = None, *, db: SportsDatabase | None = None) -> DbPushResult:
+    """資料變更後推送 SQLite 至 GitHub（供 Cloud / 其他使用者讀取 repo DB）。"""
     try:
-        push_database_to_github(message=message)
+        return persist_database_after_sync(message, db=db or get_db())
     except Exception as exc:
-        st.sidebar.caption(f"GitHub 資料庫同步略過：{exc}")
+        return DbPushResult(False, "failed", str(exc))
+
+
+def _show_db_push_result(result: DbPushResult) -> None:
+    if result.status == "pushed":
+        st.sidebar.success(f"GitHub DB · {result.detail}")
+    elif result.status == "unchanged":
+        st.sidebar.info(f"GitHub DB · {result.detail}")
+    elif result.status == "skipped":
+        st.sidebar.warning(f"GitHub DB 未推送 · {result.detail}")
+    else:
+        st.sidebar.error(f"GitHub DB 推送失敗 · {result.detail}")
+
+
+def _render_db_coverage(db: SportsDatabase, sport: str) -> None:
+    cov = db.get_schedule_coverage(sport)  # type: ignore[arg-type]
+    last = str(cov.get("last_date") or "—")
+    today_ok = "含今日" if cov.get("covers_today") else "尚無今日"
+    pushed = db.get_backtest_sync_meta(sport, "db_pushed_at")  # type: ignore[arg-type]
+    push_note = f" · GitHub {str(pushed)[:16]}" if pushed else ""
+    st.sidebar.caption(
+        f"📦 DB 賽程 {cov.get('first_date', '—')} → {last} · {today_ok} · "
+        f"{cov.get('total_games', 0)} 場{push_note}"
+    )
+    st.sidebar.caption("看板優先讀取 repo 內 data/sportsbet.db；同步後自動推送 GitHub。")
 
 
 def ensure_data(sport: str) -> None:
-    """看板載入：只讀 DB，不在此觸發重型同步（由 watch / CLI 負責）。"""
+    """看板載入：優先讀 repo DB；僅在資料空或缺今日賽程時提示同步。"""
     db = get_db()
+    cov = db.get_schedule_coverage(sport)  # type: ignore[arg-type]
+    if cov.get("covers_today") or cov.get("total_games", 0) > 0:
+        return
     if db.get_team_stats(sport).empty and db.get_games(sport, date.today().isoformat()).empty:
         st.sidebar.warning(
             "資料庫為空。請先執行：`python main.py watch --sport all` 或 `python main.py sync --mode daily --sport all`"
@@ -171,7 +198,7 @@ def page_backtest_review(sport: str) -> None:
     if st.button("重新產生全部覆盤紀錄", type="primary"):
         with st.spinner("同步歷史賽果、傷兵並重算全部覆盤…"):
             stats = run_full_backtest_refresh(db, sport, sync_api=True, sync_injuries=True)
-            _persist_database(f"chore(data): full backtest refresh {sport}")
+            _persist_database(f"chore(data): full backtest refresh {sport}", db=db)
         st.success(
             f"覆盤已更新：{stats.get('forecasts', 0)} 場預測、"
             f"{stats.get('games_with_scores', 0)} 場有比分、"
@@ -559,16 +586,19 @@ def main() -> None:
         try:
             db = get_db()
             orch = DataOrchestrator(db)
-            with st.spinner("完整同步中…"):
+            with st.spinner("完整同步中…（完成後推送 GitHub DB）"):
                 orch.sync_daily(sport, days_ahead=7, force_players=True)  # type: ignore[arg-type]
                 run_incremental_backtest_refresh(db, sport, sync_api=False, sync_injuries=False)
-            _persist_database(f"chore(data): full sync {sport}")
+            push = _persist_database(f"chore(data): full sync {sport}", db=db)
+            _show_db_push_result(push)
             st.session_state["last_api_error"] = ""
             st.sidebar.success("完整同步完成")
             st.cache_resource.clear()
             st.rerun()
         except Exception as exc:
             _show_sidebar_api_error(exc)
+
+    _render_db_coverage(get_db(), sport)
 
     last_live = get_db().get_backtest_sync_meta(sport, "live_synced_at")
     if last_live:

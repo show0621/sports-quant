@@ -1247,6 +1247,32 @@ class SportsDatabase:
                 (sport, meta_key, meta_value, datetime.now().isoformat(timespec="seconds")),
             )
 
+    def get_schedule_coverage(self, sport: Sport) -> dict[str, object]:
+        """DB 賽程涵蓋範圍（看板優先讀 DB 時顯示）。"""
+        today = date.today().isoformat()
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT MAX(match_date) AS last_date,
+                       MIN(match_date) AS first_date,
+                       COUNT(*) AS total_games,
+                       SUM(CASE WHEN match_date = ? THEN 1 ELSE 0 END) AS today_games,
+                       SUM(CASE WHEN match_date >= ? THEN 1 ELSE 0 END) AS future_games
+                FROM games WHERE sport = ?
+                """,
+                (today, today, sport),
+            ).fetchone()
+        last = str(row["last_date"] or "")[:10] if row else ""
+        first = str(row["first_date"] or "")[:10] if row else ""
+        return {
+            "first_date": first,
+            "last_date": last,
+            "total_games": int(row["total_games"] or 0) if row else 0,
+            "today_games": int(row["today_games"] or 0) if row else 0,
+            "future_games": int(row["future_games"] or 0) if row else 0,
+            "covers_today": last >= today if last else False,
+        }
+
     def is_backtest_cache_warm(self, sport: Sport) -> bool:
         """是否已有覆盤快取（至少一場已結束賽事且含 forecast）。"""
         with self.connection() as conn:

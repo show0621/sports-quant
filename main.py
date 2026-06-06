@@ -62,7 +62,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
 def cmd_sync(args: argparse.Namespace) -> None:
     from sportsbet import config
     from sportsbet.data.database import SportsDatabase
-    from sportsbet.data.db_github_sync import push_database_to_github
+    from sportsbet.data.db_github_sync import persist_database_after_sync
     from sportsbet.data.orchestrator import DataOrchestrator
 
     db = SportsDatabase()
@@ -98,7 +98,7 @@ def cmd_sync(args: argparse.Namespace) -> None:
         logger.info("sync %s %s: %s", sp, args.mode, stats)
 
     if args.push or config.GITHUB_AUTO_PUSH:
-        push_database_to_github(message=f"chore(data): sync {args.mode} {args.sport}")
+        persist_database_after_sync(message=f"chore(data): sync {args.mode} {args.sport}", db=db)
 
 
 def cmd_watch(args: argparse.Namespace) -> None:
@@ -152,7 +152,7 @@ def cmd_merge_backtest(args: argparse.Namespace) -> None:
 
 def cmd_refresh_backtest(args: argparse.Namespace) -> None:
     from sportsbet.data.database import SportsDatabase
-    from sportsbet.data.db_github_sync import push_database_to_github
+    from sportsbet.data.db_github_sync import persist_database_after_sync
     from sportsbet.services.data_refresh import (
         run_full_backtest_refresh,
         run_incremental_backtest_refresh,
@@ -165,7 +165,7 @@ def cmd_refresh_backtest(args: argparse.Namespace) -> None:
         stats = run_incremental_backtest_refresh(db, args.sport, sync_api=not args.no_api)
     logger.info("覆盤刷新: %s", stats)
     if args.push:
-        push_database_to_github(message=f"chore(data): refresh backtest {args.sport}")
+        persist_database_after_sync(message=f"chore(data): refresh backtest {args.sport}", db=db)
 
 
 def cmd_scrape_playsport(args: argparse.Namespace) -> None:
@@ -185,10 +185,10 @@ def cmd_push_db(args: argparse.Namespace) -> None:
     from sportsbet.data.db_github_sync import push_database_to_github
 
     ok = push_database_to_github(force=True)
-    if ok:
+    if ok.ok:
         logger.info("資料庫已推送至 GitHub")
     else:
-        logger.error("推送失敗（請確認 GITHUB_TOKEN）")
+        logger.error("推送失敗：%s", ok.detail)
 
 
 def cmd_simulate(args: argparse.Namespace) -> None:

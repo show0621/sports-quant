@@ -162,6 +162,16 @@ class DataOrchestrator:
 
         self.db.set_backtest_sync_meta(sport, "daily_synced_at", today.isoformat())
         logger.info("daily sync sport=%s stats=%s", sport, out)
+
+        if config.GITHUB_AUTO_PUSH:
+            from sportsbet.data.db_github_sync import persist_database_after_sync
+
+            push = persist_database_after_sync(
+                f"chore(data): daily sync {sport}",
+                db=self.db,
+            )
+            logger.info("daily sync github push: %s %s", push.status, push.detail)
+
         return out
 
     def sync_backtest_incremental(self, sport: Sport) -> dict[str, int]:

@@ -14,19 +14,24 @@ from sportsbet.services.live_sync import LiveSyncService
 from sportsbet.services.prediction_service import PredictionService
 
 
-def _trigger_live_sync(sport: str) -> dict[str, int | str] | None:
+def _trigger_live_sync(
+    sport: str,
+    db: SportsDatabase,
+    *,
+    push_github: bool = False,
+) -> dict[str, int | str] | None:
     try:
-        return LiveSyncService().sync_live(sport)  # type: ignore[arg-type]
+        return LiveSyncService(db).sync_live(sport, push_github=push_github)  # type: ignore[arg-type]
     except Exception as exc:
         st.error(f"即時同步失敗：{exc}")
         return None
 
 
 @st.fragment(run_every=config.DASHBOARD_AUTOREFRESH_SEC)
-def _live_autorefresh_block(sport: str, *, enabled: bool) -> None:
+def _live_autorefresh_block(sport: str, db: SportsDatabase, *, enabled: bool) -> None:
     if not enabled:
         return
-    stats = _trigger_live_sync(sport)
+    stats = _trigger_live_sync(sport, db, push_github=False)
     if stats:
         st.session_state["last_live_sync"] = datetime.now().isoformat(timespec="seconds")
         st.session_state["last_live_stats"] = stats
@@ -45,14 +50,17 @@ def page_live_monitor(
 
     auto = st.toggle("啟用看板自動刷新（即時同步）", value=False, key="live_autorefresh")
     if st.button("立即刷新", type="primary"):
-        stats = _trigger_live_sync(sport)
+        stats = _trigger_live_sync(sport, db, push_github=True)
         if stats:
             st.session_state["last_live_sync"] = datetime.now().isoformat(timespec="seconds")
             st.session_state["last_live_stats"] = stats
+            detail = stats.get("github_detail")
+            if detail:
+                st.caption(f"GitHub DB · {detail}")
             st.success(f"同步完成：{stats}")
 
     if auto:
-        _live_autorefresh_block(sport, enabled=True)
+        _live_autorefresh_block(sport, db, enabled=True)
 
     last = st.session_state.get("last_live_sync") or db.get_backtest_sync_meta(
         sport, "live_synced_at"  # type: ignore[arg-type]
