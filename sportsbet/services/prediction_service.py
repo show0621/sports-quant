@@ -452,3 +452,39 @@ class PredictionService:
             review = self.run_backtest_reconcile(sport, only_missing=False)
             history_n = len(review)
         return {"upcoming": len(upcoming), "history": history_n}
+
+
+def load_stored_for_date_compat(
+    svc: PredictionService,
+    sport: Sport,
+    match_date: str | None = None,
+) -> list[GameForecast]:
+    """讀取已儲存預測；相容舊版 PredictionService（Streamlit Cloud）。"""
+    loader = getattr(svc, "load_stored_for_date", None)
+    if callable(loader):
+        return loader(sport, match_date)
+
+    from sportsbet.models.forecast import game_forecast_from_db_row
+
+    d = match_date or date.today().isoformat()
+    games = svc.db.get_games(sport, d)
+    if games.empty:
+        return []
+
+    game_ids = [int(g) for g in games["id"].tolist()]
+    fc_rows: dict[int, pd.Series] = {}
+    batch = getattr(svc.db, "get_game_forecasts_for_ids", None)
+    if callable(batch):
+        fc_rows = batch(game_ids)
+    elif hasattr(svc.db, "get_game_forecast_row"):
+        for gid in game_ids:
+            row = svc.db.get_game_forecast_row(gid)
+            if row is not None:
+                fc_rows[gid] = row
+
+    out: list[GameForecast] = []
+    for _, g in games.drop_duplicates(subset=["id"]).iterrows():
+        row = fc_rows.get(int(g["id"]))
+        if row is not None:
+            out.append(game_forecast_from_db_row(row, g))
+    return out

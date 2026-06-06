@@ -11,7 +11,7 @@ from sportsbet.data.data_quality import data_quality_detail
 from sportsbet.data.database import SportsDatabase
 from sportsbet.risk.ev import RiskManager
 from sportsbet.services.live_sync import LiveSyncService
-from sportsbet.services.prediction_service import PredictionService
+from sportsbet.services.prediction_service import PredictionService, load_stored_for_date_compat
 
 
 def _trigger_live_sync(
@@ -106,7 +106,7 @@ def page_live_monitor(
     risk = RiskManager()
     forecasts = {
         fc.game_id: fc
-        for fc in prediction_svc.load_stored_for_date(sport, today)
+        for fc in load_stored_for_date_compat(prediction_svc, sport, today)
         if fc.game_id
     }
 

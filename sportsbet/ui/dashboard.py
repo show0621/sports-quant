@@ -28,7 +28,7 @@ from sportsbet.evaluation.evaluator import EvaluationModule  # noqa: E402
 from sportsbet.models.analytics_engine import AnalyticsEngine  # noqa: E402
 from sportsbet.risk.ev import RiskManager  # noqa: E402
 from sportsbet.services.data_refresh import run_full_backtest_refresh, run_incremental_backtest_refresh  # noqa: E402
-from sportsbet.services.prediction_service import PredictionService  # noqa: E402
+from sportsbet.services.prediction_service import PredictionService, load_stored_for_date_compat  # noqa: E402
 from sportsbet.ui.live_monitor_page import page_live_monitor  # noqa: E402
 from sportsbet.ui.live_scoreboard import render_live_scoreboard  # noqa: E402
 from sportsbet.ui.theme import inject_dashboard_theme, render_masthead  # noqa: E402
@@ -179,7 +179,7 @@ def build_daily_predictions(sport: str) -> pd.DataFrame:
     if board.empty:
         return pd.DataFrame()
 
-    forecasts = {fc.game_id: fc for fc in svc.load_stored_for_date(sport, today) if fc.game_id}
+    forecasts = {fc.game_id: fc for fc in load_stored_for_date_compat(svc, sport, today) if fc.game_id}
     rows = []
     for _, g in board.drop_duplicates(subset=["game_id", "market", "selection"]).iterrows():
         gid = int(g["game_id"])
