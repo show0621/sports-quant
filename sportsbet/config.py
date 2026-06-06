@@ -167,11 +167,6 @@ TOTAL_PROB_SHRINK: dict[str, float] = {
     "mlb": float(os.getenv("TOTAL_PROB_SHRINK_MLB", "0.38")),
 }
 TOTAL_MARKET_BLEND = float(os.getenv("TOTAL_MARKET_BLEND", "0.40"))
-
-# --- 玩運彩 60%+ 會員預測比例（predict/scale）→ 機率 V2 ---
-MEMBER_CONSENSUS_ENABLED = os.getenv("MEMBER_CONSENSUS_ENABLED", "true").lower() == "true"
-MEMBER_CONSENSUS_TIER = os.getenv("MEMBER_CONSENSUS_TIER", "win60")  # sid=1
-MEMBER_CONSENSUS_DAYS_AHEAD = int(os.getenv("MEMBER_CONSENSUS_DAYS_AHEAD", "7"))
 SPREAD_PROB_SHRINK: dict[str, float] = {
     "nba": float(os.getenv("SPREAD_PROB_SHRINK_NBA", "0.55")),
     "mlb": float(os.getenv("SPREAD_PROB_SHRINK_MLB", "0.45")),

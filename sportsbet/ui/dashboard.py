@@ -48,7 +48,7 @@ def _pct(v: float | None) -> str:
 
 
 # 遞增以在 Streamlit Cloud 部署後清掉舊版 SportsDatabase 快取
-_DB_CACHE_VERSION = 7
+_DB_CACHE_VERSION = 8
 
 
 def _schedule_coverage(db: SportsDatabase, sport: str) -> dict[str, object]:
@@ -131,11 +131,10 @@ def _cached_bankroll_simulation(
     market_key: str,
     allowed_markets: tuple[str, ...],
     min_ev: float,
-    model_line: str,
 ) -> tuple[dict, pd.Series, pd.DataFrame, int]:
     """從 DB 讀 predictions + 跑 Kelly 模擬；fingerprint 變才重算。"""
     db = SportsDatabase()
-    df = db.get_backtest_frame(sport, model_line=model_line)
+    df = db.get_backtest_frame(sport)
     if df.empty:
         return {"error": "無資料"}, pd.Series([config.INITIAL_BANKROLL]), pd.DataFrame(), 0
     df = df.dropna(subset=["model_prob", "won", "odds"]).copy()
@@ -634,44 +633,12 @@ def page_bankroll(sport: str) -> None:
     market_label = st.selectbox("盤口篩選", list(market_opts.keys()), index=0)
     market_key = market_opts[market_label]
 
-    model_line_label = st.selectbox(
-        "預測主線",
-        ["V1 模型", "V2 玩運彩會員", "V1 vs V2 對照"],
-        index=0,
-        help="V1=原模型最終勝率；V2=玩運彩60%+會員預測占比（獨立主線）",
-    )
-
-    if model_line_label == "V1 vs V2 對照":
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.subheader("V1 模型")
-            s1, e1, t1, n1 = _cached_bankroll_simulation(
-                fp, sport, market_key, tuple(allowed), config.MIN_EV_THRESHOLD, "v1",
-            )
-            if s1.get("error") != "無資料":
-                st.metric("ROI", format_compact_pct(s1.get("roi", 0), signed=True))
-                st.metric("下注場次", s1.get("total_trades", 0))
-        with col_b:
-            st.subheader("V2 玩運彩會員")
-            s2, e2, t2, n2 = _cached_bankroll_simulation(
-                fp, sport, market_key, tuple(allowed), config.MIN_EV_THRESHOLD, "v2",
-            )
-            if s2.get("error") != "無資料":
-                st.metric("ROI", format_compact_pct(s2.get("roi", 0), signed=True))
-                st.metric("下注場次", s2.get("total_trades", 0))
-            else:
-                st.info("V2 尚無資料（需有玩運彩會員預測 + 執行同步）。")
-        return
-
-    model_line = "v2" if model_line_label.startswith("V2") else "v1"
-
     summary, equity, trades, raw_n = _cached_bankroll_simulation(
         fp,
         sport,
         market_key,
         tuple(allowed),
         config.MIN_EV_THRESHOLD,
-        model_line,
     )
     if summary.get("error") == "無資料" and raw_n == 0:
         with db.connection() as conn:

@@ -63,7 +63,15 @@ def prepare_backtest_odds(
         out["moneyline_backfill"] = backfill_tw_moneyline_odds(db, sport)
     if "market_predictions" not in out and out.get("tw_odds_sportslottery", 0) > 0:
         out["market_predictions"] = rebuild_predictions_from_forecasts(db, sport)
-    out["v2_predictions"] = rebuild_v2_predictions_from_member_consensus(db, sport, replace_all=True)
+    with db.connection() as conn:
+        conn.execute(
+            """
+            DELETE FROM predictions
+            WHERE model_line = 'v2'
+              AND game_id IN (SELECT id FROM games WHERE sport = ?)
+            """,
+            (sport,),
+        )
     return out
 
 
@@ -259,75 +267,6 @@ def rebuild_predictions_from_forecasts(
                 """,
                 (
                     row["game_id"], market, sel, prob,
-                    sig.ev, sig.kelly_fraction, sig.recommended_stake_fraction,
-                ),
-            )
-            n += 1
-    return n
-
-
-def rebuild_v2_predictions_from_member_consensus(
-    db: SportsDatabase,
-    sport: Sport,
-    *,
-    replace_all: bool = False,
-) -> int:
-    """V2 主線：玩運彩 60%+ 會員占比 → predictions（model_line=v2）。"""
-    tier = config.MEMBER_CONSENSUS_TIER
-    with db.connection() as conn:
-        rows = conn.execute(
-            """
-            SELECT g.id AS game_id, g.sport,
-                   mc.market, mc.selection, mc.member_pct,
-                   o.odds, o.handicap
-            FROM member_consensus mc
-            JOIN games g ON g.id = mc.game_id
-            JOIN odds o ON o.game_id = g.id
-                AND o.market = mc.market
-                AND o.selection = mc.selection
-            WHERE g.sport = ?
-              AND g.status = 'final'
-              AND g.home_score IS NOT NULL
-              AND mc.member_tier = ?
-              AND mc.board = 'tw'
-              AND mc.member_pct IS NOT NULL
-            """,
-            (sport, tier),
-        ).fetchall()
-
-    if not rows:
-        return 0
-
-    risk = RiskManager()
-    n = 0
-    with db.connection() as conn:
-        if replace_all:
-            conn.execute(
-                """
-                DELETE FROM predictions
-                WHERE model_line = 'v2'
-                  AND game_id IN (SELECT id FROM games WHERE sport = ?)
-                """,
-                (sport,),
-            )
-        for row in rows:
-            prob = max(0.001, min(0.999, float(row["member_pct"])))
-            sig = risk.evaluate(prob, float(row["odds"]))
-            conn.execute(
-                """
-                DELETE FROM predictions
-                WHERE game_id = ? AND market = ? AND selection = ? AND model_line = 'v2'
-                """,
-                (row["game_id"], row["market"], row["selection"]),
-            )
-            conn.execute(
-                """
-                INSERT INTO predictions (
-                    game_id, market, selection, model_prob, ev, kelly_fraction, stake_fraction, model_line
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'v2')
-                """,
-                (
-                    row["game_id"], row["market"], row["selection"], prob,
                     sig.ev, sig.kelly_fraction, sig.recommended_stake_fraction,
                 ),
             )

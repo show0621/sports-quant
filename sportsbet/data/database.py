@@ -1308,9 +1308,8 @@ class SportsDatabase:
             ).fetchone()
             return int(row["n"]) if row else 0
 
-    def get_backtest_frame(self, sport: Sport, *, model_line: str = "v1") -> pd.DataFrame:
-        """已結束賽事 + 預測機率 + 賠率，供評估模組使用。"""
-        line = model_line or "v1"
+    def get_backtest_frame(self, sport: Sport) -> pd.DataFrame:
+        """已結束賽事 + 預測機率 + 賠率，供評估模組使用（僅模型 predictions）。"""
         with self.connection() as conn:
             return pd.read_sql_query(
                 """
@@ -1318,7 +1317,6 @@ class SportsDatabase:
                        g.home_score, g.away_score,
                        o.market, o.selection, o.handicap, o.odds,
                        p.model_prob, p.ev, p.stake_fraction,
-                       COALESCE(p.model_line, 'v1') AS model_line,
                        CASE
                            WHEN o.market = 'moneyline' AND o.selection = 'home'
                                THEN CASE WHEN g.home_score > g.away_score THEN 1 ELSE 0 END
@@ -1339,7 +1337,7 @@ class SportsDatabase:
                 LEFT JOIN predictions p ON p.game_id = g.id
                     AND p.market = o.market
                     AND p.selection = o.selection
-                    AND COALESCE(p.model_line, 'v1') = ?
+                    AND COALESCE(p.model_line, 'v1') = 'v1'
                 WHERE g.sport = ?
                   AND g.status = 'final'
                   AND g.home_score IS NOT NULL
@@ -1349,7 +1347,7 @@ class SportsDatabase:
                 ORDER BY g.match_date, g.id
                 """,
                 conn,
-                params=(line, sport),
+                params=(sport,),
             )
 
     def get_backtest_sync_meta(self, sport: Sport, meta_key: str) -> str | None:
