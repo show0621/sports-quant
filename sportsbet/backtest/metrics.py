@@ -8,6 +8,7 @@ from sklearn.metrics import brier_score_loss, confusion_matrix
 
 def brier_score(y_true: np.ndarray, y_prob: np.ndarray) -> float:
     """Brier Score，越低越好（完美校準 = 0）。"""
+    y_prob = np.clip(np.asarray(y_prob, dtype=float), 0.0, 1.0)
     return float(brier_score_loss(y_true, y_prob))
 
 

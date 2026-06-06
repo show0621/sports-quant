@@ -267,6 +267,12 @@ class SportsDatabase:
         home_logo_url: str | None = None,
         away_logo_url: str | None = None,
     ) -> int:
+        from sportsbet.data.team_names import is_cross_sport_game
+
+        if is_cross_sport_game(sport, home_team, away_team):
+            raise ValueError(
+                f"cross-sport game rejected: sport={sport} {home_team} vs {away_team}"
+            )
         with self.connection() as conn:
             cur = conn.execute(
                 """
@@ -309,6 +315,35 @@ class SportsDatabase:
         odds_phase: str = "close",
     ) -> None:
         with self.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO odds (game_id, market, selection, handicap, odds, bookmaker, odds_phase)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (game_id, market, selection, handicap, odds, bookmaker, odds_phase),
+            )
+
+    def upsert_odds(
+        self,
+        game_id: int,
+        market: str,
+        selection: str,
+        odds: float,
+        *,
+        handicap: float | None = None,
+        bookmaker: str = "jbot",
+        odds_phase: str = "close",
+    ) -> None:
+        """同一 game/market/selection/bookmaker/phase 只保留一筆。"""
+        with self.connection() as conn:
+            conn.execute(
+                """
+                DELETE FROM odds
+                WHERE game_id = ? AND market = ? AND selection = ?
+                  AND bookmaker = ? AND odds_phase = ?
+                """,
+                (game_id, market, selection, bookmaker, odds_phase),
+            )
             conn.execute(
                 """
                 INSERT INTO odds (game_id, market, selection, handicap, odds, bookmaker, odds_phase)
@@ -596,7 +631,7 @@ class SportsDatabase:
                 SELECT f.*, g.match_datetime, g.status AS game_status,
                        g.home_logo_url, g.away_logo_url
                 FROM game_forecasts f
-                JOIN games g ON g.id = f.game_id
+                JOIN games g ON g.id = f.game_id AND g.sport = f.sport
                 WHERE f.sport = ?
                   AND g.match_date >= date('now')
                   AND (g.status IS NULL OR g.status NOT IN ({placeholders}))
@@ -608,27 +643,28 @@ class SportsDatabase:
 
     def get_forecast_review(self, sport: Sport, *, final_only: bool = True) -> pd.DataFrame:
         sql = """
-            SELECT match_date, home_team, away_team, status,
-                   predicted_winner, actual_winner, pick_correct,
-                   home_win_prob, away_win_prob,
-                   home_win_prob_base, away_win_prob_base,
-                   home_injury_adj, away_injury_adj,
-                   home_injury_penalty, away_injury_penalty,
-                   home_pyth, away_pyth,
-                   home_season_win_pct, away_season_win_pct,
-                   home_recent_win_pct, away_recent_win_pct,
-                   home_bayesian_win_pct, away_bayesian_win_pct,
-                   predicted_home_score, predicted_away_score, predicted_total,
-                   actual_home_score, actual_away_score,
-                   predicted_margin, margin_error, total_error,
-                   total_line, prob_over, prob_under, margin_note
-            FROM game_forecasts
-            WHERE sport = ?
+            SELECT f.match_date, f.home_team, f.away_team, f.status,
+                   f.predicted_winner, f.actual_winner, f.pick_correct,
+                   f.home_win_prob, f.away_win_prob,
+                   f.home_win_prob_base, f.away_win_prob_base,
+                   f.home_injury_adj, f.away_injury_adj,
+                   f.home_injury_penalty, f.away_injury_penalty,
+                   f.home_pyth, f.away_pyth,
+                   f.home_season_win_pct, f.away_season_win_pct,
+                   f.home_recent_win_pct, f.away_recent_win_pct,
+                   f.home_bayesian_win_pct, f.away_bayesian_win_pct,
+                   f.predicted_home_score, f.predicted_away_score, f.predicted_total,
+                   f.actual_home_score, f.actual_away_score,
+                   f.predicted_margin, f.margin_error, f.total_error,
+                   f.total_line, f.prob_over, f.prob_under, f.margin_note
+            FROM game_forecasts f
+            JOIN games g ON g.id = f.game_id AND g.sport = f.sport
+            WHERE f.sport = ?
         """
         params: list[Any] = [sport]
         if final_only:
-            sql += " AND status = 'final' AND actual_winner IS NOT NULL"
-        sql += " ORDER BY match_date DESC, id DESC"
+            sql += " AND f.status = 'final' AND f.actual_winner IS NOT NULL"
+        sql += " ORDER BY f.match_date DESC, f.id DESC"
         with self.connection() as conn:
             return pd.read_sql_query(sql, conn, params=params)
 
@@ -858,6 +894,48 @@ class SportsDatabase:
                   )
                 """,
                 (sport,),
+            )
+            return cur.rowcount
+
+    def purge_cross_sport_games(self, sport: Sport | None = None) -> int:
+        """刪除 sport 欄位與隊名不符的污染賽事及關聯資料。"""
+        from sportsbet.data.team_names import is_cross_sport_game
+
+        sports: tuple[Sport, ...] = (sport,) if sport else ("nba", "mlb")
+        removed = 0
+        with self.connection() as conn:
+            for sp in sports:
+                rows = conn.execute(
+                    "SELECT id, home_team, away_team FROM games WHERE sport = ?",
+                    (sp,),
+                ).fetchall()
+                bad_ids = [
+                    int(r["id"])
+                    for r in rows
+                    if is_cross_sport_game(sp, r["home_team"], r["away_team"])
+                ]
+                if not bad_ids:
+                    continue
+                ph = ",".join("?" for _ in bad_ids)
+                for table, col in (
+                    ("predictions", "game_id"),
+                    ("odds", "game_id"),
+                    ("game_forecasts", "game_id"),
+                ):
+                    conn.execute(f"DELETE FROM {table} WHERE {col} IN ({ph})", bad_ids)
+                conn.execute(f"DELETE FROM games WHERE id IN ({ph})", bad_ids)
+                removed += len(bad_ids)
+        return removed
+
+    def clip_prediction_probabilities(self) -> int:
+        """修正浮點誤差導致 model_prob 略大於 1 的紀錄。"""
+        with self.connection() as conn:
+            cur = conn.execute(
+                """
+                UPDATE predictions
+                SET model_prob = MIN(model_prob, 1.0)
+                WHERE model_prob > 1.0 OR model_prob < 0.0
+                """
             )
             return cur.rowcount
 

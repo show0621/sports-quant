@@ -70,7 +70,7 @@ class EvaluationModule:
             )
 
         y_true = d[outcome_col].astype(int).values
-        y_prob = d[prob_col].astype(float).values
+        y_prob = np.clip(d[prob_col].astype(float).values, 0.0, 1.0)
         bs = self.brier(y_true, y_prob)
         acc = accuracy_report(d, prob_col, outcome_col)
         cal = self.calibration_bins(d, prob_col, outcome_col, n_bins=10)

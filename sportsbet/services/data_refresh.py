@@ -47,7 +47,40 @@ def prepare_backtest_odds(
         if config.ALLOW_TW_MONEYLINE_BACKFILL
         else 0
     )
+    if out["jbot_odds"] > 0:
+        out["moneyline_predictions"] = rebuild_moneyline_predictions(db, sport)
     return out
+
+
+def rebuild_moneyline_predictions(db: SportsDatabase, sport: Sport) -> int:
+    """JBot 寫入 moneyline 後，重建對應 predictions。"""
+    with db.connection() as conn:
+        conn.execute(
+            """
+            DELETE FROM predictions
+            WHERE market = 'moneyline'
+              AND game_id IN (SELECT id FROM games WHERE sport = ?)
+            """,
+            (sport,),
+        )
+    with db.connection() as conn:
+        game_ids = [
+            int(r["game_id"])
+            for r in conn.execute(
+                """
+                SELECT DISTINCT o.game_id
+                FROM odds o
+                JOIN games g ON g.id = o.game_id
+                WHERE g.sport = ?
+                  AND o.market = 'moneyline'
+                  AND g.status = 'final'
+                """,
+                (sport,),
+            ).fetchall()
+        ]
+    if not game_ids:
+        return 0
+    return rebuild_predictions_from_forecasts(db, sport, game_ids=game_ids)
 
 
 def sync_historical_games(

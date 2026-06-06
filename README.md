@@ -39,10 +39,22 @@ python scripts/validate_model.py
 streamlit run dashboard.py
 ```
 
-### 歷史盤口（JBot，需 JBOT_TOKEN）
+### 歷史 moneyline（JBot，必填才有回測 EV）
+
+1. 至 [sportsbot.tech/trial](https://sportsbot.tech/trial) 申請 API 密鑰
+2. 本機設定（不會 commit）：
 
 ```powershell
-python main.py scrape --sport nba --jbot --days-back 30
+python scripts/setup_jbot_token.py YOUR_JBOT_TOKEN
+python scripts/sync_jbot_moneyline.py --sport all --days 14 --rebuild
+python main.py push-db
+```
+
+3. Streamlit Cloud → **Settings → Secrets** 加入 `JBOT_TOKEN = "..."`
+
+```powershell
+# 或透過 backtest 流程自動同步 JBot
+python main.py sync --mode backtest --sport nba
 ```
 
 ## 資料來源

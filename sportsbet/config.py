@@ -59,6 +59,23 @@ def resolve_api_sports_key() -> str:
         return ""
 
 
+def resolve_jbot_token() -> str:
+    """從 .env 或 Streamlit Secrets 讀取 JBot API 密鑰。"""
+    token = os.getenv("JBOT_TOKEN", "").strip()
+    if token:
+        return token
+    try:
+        import streamlit as st
+
+        return str(st.secrets.get("JBOT_TOKEN", "")).strip()
+    except Exception:
+        return ""
+
+
+def jbot_configured() -> bool:
+    return bool(resolve_jbot_token())
+
+
 API_SPORTS_KEY = resolve_api_sports_key()
 
 # --- 畢達哥拉斯指數 ---
@@ -137,7 +154,9 @@ SPORTSLOTTERY_BLOB_BASE = os.getenv(
 )
 
 # --- JBot 歷史賠率 https://sportsbot.tech/api/sportslottery/ ---
-JBOT_TOKEN = os.getenv("JBOT_TOKEN", "")
+JBOT_TOKEN = resolve_jbot_token()
+# 單次 sync 最多抓取天數（試用密鑰每日 20 次，建議 14 以內）
+JBOT_MAX_DAYS_PER_RUN = int(os.getenv("JBOT_MAX_DAYS_PER_RUN", "14"))
 # 內部 sport → JBot API sport code
 JBOT_SPORT_CODES: dict[str, str] = {
     "nba": os.getenv("JBOT_SPORT_CODE_NBA", "BKB"),

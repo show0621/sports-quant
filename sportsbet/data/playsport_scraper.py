@@ -236,18 +236,22 @@ class PlaySportScraper:
             return df
 
         for _, row in df.iterrows():
-            gid = db.upsert_game(
-                sport,
-                row["match_date"],
-                row["home_team"],
-                row["away_team"],
-                match_datetime=row["match_datetime"],
-                home_score=int(row["home_score"]),
-                away_score=int(row["away_score"]),
-                status="final",
-                home_logo_url=espn_logo_url(row["home_team"], sport),
-                away_logo_url=espn_logo_url(row["away_team"], sport),
-            )
+            try:
+                gid = db.upsert_game(
+                    sport,
+                    row["match_date"],
+                    row["home_team"],
+                    row["away_team"],
+                    match_datetime=row["match_datetime"],
+                    home_score=int(row["home_score"]),
+                    away_score=int(row["away_score"]),
+                    status="final",
+                    home_logo_url=espn_logo_url(row["home_team"], sport),
+                    away_logo_url=espn_logo_url(row["away_team"], sport),
+                )
+            except ValueError as exc:
+                logger.debug("skip cross-sport row teamid=%s: %s", team_id, exc)
+                continue
             if row.get("spread_line") is not None and row.get("spread_team"):
                 sel = "home" if row["spread_team"] == row["home_team"] else "away"
                 handicap = float(row["spread_line"])

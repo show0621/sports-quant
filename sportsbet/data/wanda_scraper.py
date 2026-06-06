@@ -87,7 +87,7 @@ class WandaScraper:
         if not current.empty:
             frames.append(current)
 
-        if use_jbot and config.JBOT_TOKEN:
+        if use_jbot and config.jbot_configured():
             end = date.today()
             start = end - timedelta(days=days_back)
             try:

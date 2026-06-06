@@ -214,3 +214,50 @@ def build_reverse_map(sport: str) -> dict[str, str]:
         if en not in rev or len(zh) > len(rev[en]):
             rev[en] = zh
     return rev
+
+
+def known_teams(sport: str) -> set[str]:
+    """該運動的標準英文隊名集合。"""
+    m = _SPORT_MAPS.get(sport.lower(), {})
+    return set(m.values()) | {v for v in _EN_ALIASES.values()}
+
+
+NBA_TEAMS = known_teams("nba")
+MLB_TEAMS = known_teams("mlb")
+
+
+def _looks_like_playsport_pitcher_row(name: str) -> bool:
+    """玩運彩誤植：投手名當隊名（例：Lambert (洋基)）。"""
+    raw = str(name or "").strip()
+    return bool(raw) and "(" in raw
+
+
+def team_belongs_to_sport(team: str, sport: str) -> bool:
+    """隊名是否屬於指定運動（含正規化後比對）。"""
+    if not team:
+        return False
+    canonical = normalize_team_name(team, sport)
+    known = known_teams(sport)
+    if canonical in known:
+        return True
+    low = canonical.lower()
+    return any(t.lower() == low or t.lower() in low or low in t.lower() for t in known)
+
+
+def is_cross_sport_game(sport: str, home_team: str, away_team: str) -> bool:
+    """偵測 sport 欄位與隊名明顯不符（NBA 混入 MLB 等）。"""
+    sport = sport.lower()
+    other = "mlb" if sport == "nba" else "nba"
+    other_teams = MLB_TEAMS if sport == "nba" else NBA_TEAMS
+    own_teams = NBA_TEAMS if sport == "nba" else MLB_TEAMS
+
+    for team in (home_team, away_team):
+        if sport == "nba" and _looks_like_playsport_pitcher_row(team):
+            return True
+        canonical = normalize_team_name(team, sport)
+        if canonical in other_teams and canonical not in own_teams:
+            return True
+        alt = normalize_team_name(team, other)
+        if alt in other_teams and alt not in own_teams:
+            return True
+    return False

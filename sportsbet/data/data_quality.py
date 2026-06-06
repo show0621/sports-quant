@@ -47,6 +47,14 @@ def data_quality_summary(db: SportsDatabase, sport: Sport) -> dict[str, bool]:
             """,
             (sport,),
         ).fetchone()["n"]
+        ml_n = conn.execute(
+            """
+            SELECT COUNT(DISTINCT o.game_id) AS n FROM odds o
+            JOIN games g ON g.id = o.game_id
+            WHERE g.sport = ? AND o.market = 'moneyline'
+            """,
+            (sport,),
+        ).fetchone()["n"]
         inj_n = conn.execute(
             "SELECT COUNT(*) AS n FROM injury_reports WHERE sport = ? AND source = 'espn'",
             (sport,),
@@ -55,6 +63,7 @@ def data_quality_summary(db: SportsDatabase, sport: Sport) -> dict[str, bool]:
         "team_stats": not stats.empty,
         "historical_games": int(games_n or 0) > 0,
         "tw_odds": int(odds_n or 0) > 0,
+        "moneyline_odds": int(ml_n or 0) > 0,
         "injuries": int(inj_n or 0) > 0,
         "player_rolling": has_real_player_stats(db, sport),
     }

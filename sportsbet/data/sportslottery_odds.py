@@ -40,7 +40,7 @@ class SportLotteryOddsMixin:
         replace: bool = False,
     ) -> pd.DataFrame:
         from sportsbet.data.sportslottery import SportLotteryClient
-        from sportsbet.data.team_names import normalize_matchup
+        from sportsbet.data.team_logos import resolve_team_in_database
 
         try:
             client = SportLotteryClient()
@@ -53,9 +53,11 @@ class SportLotteryOddsMixin:
             return odds_df
 
         odds_df = odds_df.copy()
-        odds_df[["home_team", "away_team"]] = odds_df.apply(
-            lambda r: pd.Series(normalize_matchup(r["home_team"], r["away_team"], sport)),
-            axis=1,
+        odds_df["home_team"] = odds_df["home_team"].map(
+            lambda t: resolve_team_in_database(self.db, sport, str(t))  # type: ignore[arg-type]
+        )
+        odds_df["away_team"] = odds_df["away_team"].map(
+            lambda t: resolve_team_in_database(self.db, sport, str(t))  # type: ignore[arg-type]
         )
         if "match_date" in odds_df.columns:
             odds_df = odds_df[odds_df["match_date"].astype(str).str[:10] == match_date]

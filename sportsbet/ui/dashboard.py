@@ -283,6 +283,9 @@ def page_model_health(sport: str) -> None:
         st.warning("尚無 moneyline 賠率，請執行 backtest sync 或設定 JBOT_TOKEN。")
         return
 
+    df_ml = df_ml.copy()
+    df_ml["model_prob"] = df_ml["model_prob"].astype(float).clip(0.0, 1.0)
+
     ev_rep = build_ev_backtest_report(df_ml)
     st.subheader("期望值回測（EV Validation）")
     st.write(ev_rep.summary_text)
@@ -378,15 +381,21 @@ def page_bankroll(sport: str) -> None:
         st.warning("尚無回測資料。")
         return
 
-    if "ev" not in df.columns:
+    df_ml = df[df["market"] == "moneyline"].copy() if "market" in df.columns else df.copy()
+    if df_ml.empty:
+        st.warning("尚無 moneyline 賠率，請執行 backtest sync 或設定 JBOT_TOKEN。")
+        return
+
+    df_ml["model_prob"] = df_ml["model_prob"].astype(float).clip(0.0, 1.0)
+
+    if "ev" not in df_ml.columns:
         risk = RiskManager()
-        df = df.copy()
-        df["ev"] = df.apply(
+        df_ml["ev"] = df_ml.apply(
             lambda r: risk.expected_value(float(r["model_prob"]), float(r["odds"])), axis=1
         )
 
     evaluator = EvaluationModule()
-    report = evaluator.run_full_evaluation(df)
+    report = evaluator.run_full_evaluation(df_ml)
     summary = report.backtest_summary
 
     c1, c2, c3, c4 = st.columns(4)
@@ -423,11 +432,16 @@ def main() -> None:
         "team_stats": "球隊統計",
         "historical_games": "歷史賽果",
         "tw_odds": "台灣盤口",
+        "moneyline_odds": "Moneyline",
         "injuries": "傷兵",
         "player_rolling": "球員滾動",
     }
     for key, label in q_labels.items():
         st.sidebar.caption(f"{'✅' if quality.get(key) else '⬜'} {label}")
+    if config.jbot_configured():
+        st.sidebar.success("JBot 歷史盤口已設定")
+    else:
+        st.sidebar.info("未設定 JBOT_TOKEN · moneyline 回測需 JBot")
     if api_key_configured():
         st.sidebar.success("API-Sports 金鑰已設定（作為備援）")
     else:
