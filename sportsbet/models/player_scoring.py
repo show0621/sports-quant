@@ -25,12 +25,14 @@ def _team_lineup_expected_points(
         lineup = players.head(8)
         lineup = lineup.assign(expected_minutes=28.0)
 
-    total_min = float(lineup["expected_minutes"].fillna(0).sum()) or 240.0
     pts_sum = 0.0
-    weight_sum = 0.0
+    covered_min = 0.0
     for _, row in lineup.iterrows():
         pid = row.get("player_id")
         if not pid:
+            continue
+        exp_min = float(row.get("expected_minutes") or 0)
+        if exp_min <= 0:
             continue
         recent = db.get_player_recent_box_scores(
             sport, str(pid), match_date, limit=recent_games,
@@ -38,14 +40,32 @@ def _team_lineup_expected_points(
         if recent.empty or recent["points"].isna().all():
             continue
         avg_pts = float(recent["points"].dropna().mean())
-        share = float(row.get("expected_minutes") or 0) / total_min
-        if share <= 0:
-            continue
-        pts_sum += avg_pts * share
-        weight_sum += share
-    if weight_sum < 0.25:
+        avg_min = float(recent["minutes"].dropna().mean()) if "minutes" in recent.columns else 0.0
+        if avg_min < 8:
+            avg_min = 28.0
+        pts_sum += avg_pts * (exp_min / avg_min)
+        covered_min += exp_min
+    if covered_min < 60:
         return None
-    return pts_sum / weight_sum
+    est = pts_sum
+    if est < 70 or est > 150:
+        return None
+    return est
+
+
+def player_matchup_win_prob(
+    home_pts: float | None,
+    away_pts: float | None,
+) -> tuple[float, float] | None:
+    """由兩隊球員近況估分推算 PK 勝率（需合理得分區間）。"""
+    if home_pts is None or away_pts is None:
+        return None
+    if home_pts < 70 or away_pts < 70:
+        return None
+    total = home_pts + away_pts
+    if total <= 0:
+        return None
+    return home_pts / total, away_pts / total
 
 
 def blend_lambdas_with_lineup_scoring(

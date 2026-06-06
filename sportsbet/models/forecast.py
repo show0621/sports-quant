@@ -151,7 +151,7 @@ def game_forecast_from_db_row(row: pd.Series, game: pd.Series | None = None) -> 
     ah = row.get("actual_home_score")
     aa = row.get("actual_away_score")
 
-    return GameForecast(
+    fc = GameForecast(
         sport=sport,
         match_date=str(row.get("match_date") or g.get("match_date", ""))[:10],
         home_team=home_team,
@@ -191,6 +191,10 @@ def game_forecast_from_db_row(row: pd.Series, game: pd.Series | None = None) -> 
         season_type=str(g["season_type"]) if g is not None and pd.notna(g.get("season_type")) else None,
         competition_note=str(g["competition_note"]) if g is not None and pd.notna(g.get("competition_note")) else None,
     )
+    from sportsbet.models.bayesian_pipeline import ensure_forecast_pipeline
+
+    ensure_forecast_pipeline(fc)
+    return fc
 
 
 def forecast_event_label(fc: GameForecast | object) -> str:
@@ -575,6 +579,71 @@ def _fmt_pct(v: float | None, *, signed: bool = False) -> str:
     return f"{x * 100:.1f}%"
 
 
+def _stage_probs(fc: GameForecast) -> dict[str, tuple[float | None, float | None]]:
+    """管線各步驟 (home_prob, away_prob)。"""
+    from sportsbet.models.bayesian_pipeline import ensure_forecast_pipeline
+
+    pipeline = ensure_forecast_pipeline(fc)
+    return {s.key: (s.home_prob, s.away_prob) for s in pipeline.stages}
+
+
+def _pair_away_home(
+    stages: dict[str, tuple[float | None, float | None]],
+    key: str,
+) -> tuple[str, str]:
+    h, a = stages.get(key, (None, None))
+    return _fmt_pct(a), _fmt_pct(h)
+
+
+def team_rating_panel_rows(fc: GameForecast) -> list[tuple[str, str, str, bool]]:
+    """球隊評分明細列：(指標, 客隊顯示, 主隊顯示, 是否最終列)。"""
+    away = fc.away
+    home = fc.home
+    stages = _stage_probs(fc)
+
+    rows: list[tuple[str, str, str, bool]] = [
+        ("戰績 W-L", format_wl_record(away.games, away.season_win_pct),
+         format_wl_record(home.games, home.season_win_pct), False),
+        ("賽季勝率", _fmt_pct(away.season_win_pct), _fmt_pct(home.season_win_pct), False),
+        ("近況勝率", _fmt_pct(away.recent_win_pct), _fmt_pct(home.recent_win_pct), False),
+        ("畢氏勝率", _fmt_pct(away.pythagorean_win_pct), _fmt_pct(home.pythagorean_win_pct), False),
+        ("Log5 對戰", _fmt_pct(away.log5_matchup_win_pct), _fmt_pct(home.log5_matchup_win_pct), False),
+    ]
+
+    for key, label in (
+        ("beta", "Beta-Binomial"),
+        ("bayes_recent", "貝氏近況修正"),
+        ("markov", "馬可夫鏈 Hot/Cold"),
+        ("h2h", "前次交鋒 H2H PK"),
+        ("ensemble", "集成後驗（傷兵前）"),
+    ):
+        av, hv = _pair_away_home(stages, key)
+        if av != "—" or hv != "—":
+            rows.append((label, av, hv, False))
+
+    if fc.away_injury_adj is not None or fc.home_injury_adj is not None:
+        rows.append(
+            ("傷兵修正", _fmt_pct(fc.away_injury_adj, signed=True),
+             _fmt_pct(fc.home_injury_adj, signed=True), False),
+        )
+        av, hv = _pair_away_home(stages, "injury")
+        if av != "—" or hv != "—":
+            rows.append(("傷兵後勝率", av, hv, False))
+
+    av, hv = _pair_away_home(stages, "player_pk")
+    if av != "—" or hv != "—":
+        rows.append(("球員數據 PK", av, hv, False))
+
+    av, hv = _pair_away_home(stages, "mc")
+    if av != "—" or hv != "—":
+        rows.append(("MC 模擬後驗", av, hv, False))
+
+    rows.append(
+        ("最終 PK 修正勝率", _fmt_pct(fc.away_win_prob), _fmt_pct(fc.home_win_prob), True),
+    )
+    return rows
+
+
 def team_rating_panel_html(fc: GameForecast, sport: str) -> str:
     """即時看板：兩隊評分對照表 HTML。"""
     from sportsbet.data.team_names import team_bilingual
@@ -586,27 +655,12 @@ def team_rating_panel_html(fc: GameForecast, sport: str) -> str:
     a_head = f"{a_en}<br><span class='sq-rating-zh'>{a_zh}</span>" if a_zh else a_en
     h_head = f"{h_en}<br><span class='sq-rating-zh'>{h_zh}</span>" if h_zh else h_en
 
-    away_base = fc.away_win_prob_base
-    home_base = fc.home_win_prob_base
-    away_adj = fc.away_injury_adj
-    home_adj = fc.home_injury_adj
-
-    rows = [
-        ("戰績 W-L", format_wl_record(away.games, away.season_win_pct),
-         format_wl_record(home.games, home.season_win_pct)),
-        ("賽季勝率", _fmt_pct(away.season_win_pct), _fmt_pct(home.season_win_pct)),
-        ("畢氏勝率", _fmt_pct(away.pythagorean_win_pct), _fmt_pct(home.pythagorean_win_pct)),
-        ("貝氏勝率", _fmt_pct(away.bayesian_win_pct), _fmt_pct(home.bayesian_win_pct)),
-        ("傷兵前勝率", _fmt_pct(away_base), _fmt_pct(home_base)),
-        ("傷兵修正", _fmt_pct(away_adj, signed=True), _fmt_pct(home_adj, signed=True)),
-        ("模型預測勝率", _fmt_pct(fc.away_win_prob), _fmt_pct(fc.home_win_prob)),
-    ]
-
     body = "".join(
-        f"<tr><td class='sq-rating-metric'>{label}</td>"
+        f"<tr{' class=\"sq-rating-final\"' if is_final else ''}>"
+        f"<td class='sq-rating-metric'>{label}</td>"
         f"<td class='sq-rating-val away'>{av}</td>"
         f"<td class='sq-rating-val home'>{hv}</td></tr>"
-        for label, av, hv in rows
+        for label, av, hv, is_final in team_rating_panel_rows(fc)
     )
     return (
         f"<div class='sq-rating-panel'>"
@@ -618,28 +672,38 @@ def team_rating_panel_html(fc: GameForecast, sport: str) -> str:
 
 
 def team_detail_dataframe(f: GameForecast) -> pd.DataFrame:
-    """單場兩隊明細表。"""
+    """單場兩隊明細表（含貝氏/馬可夫/球員 PK 各層修正至最終勝率）。"""
+    stages = _stage_probs(f)
+
+    def _side(key: str, side: str) -> float | None:
+        pair = stages.get(key)
+        if not pair:
+            return None
+        return pair[0] if side == "home" else pair[1]
+
     rows = []
-    for side, label in [(f.home, "主"), (f.away, "客")]:
+    for side_obj, label, side_key in [(f.home, "主", "home"), (f.away, "客", "away")]:
         rows.append(
             {
                 "主客": label,
-                "隊伍": side.team,
-                "戰績 W-L": format_wl_record(side.games, side.season_win_pct),
-                "场均得分": round(side.rs_per_game, 2),
-                "场均失分": round(side.ra_per_game, 2),
-                "畢達哥拉斯勝率": side.pythagorean_win_pct,
-                "賽季勝率": side.season_win_pct,
-                "近況勝率": side.recent_win_pct,
-                "Log5單場勝率": side.log5_matchup_win_pct,
-                "貝氏修正勝率": side.bayesian_win_pct,
-                "傷兵前勝率": (
-                    f.home_win_prob_base if label == "主" else f.away_win_prob_base
-                ),
-                "傷兵修正": (
-                    f.home_injury_adj if label == "主" else f.away_injury_adj
-                ),
-                "最終預測勝率": f.home_win_prob if label == "主" else f.away_win_prob,
+                "隊伍": side_obj.team,
+                "戰績 W-L": format_wl_record(side_obj.games, side_obj.season_win_pct),
+                "场均得分": round(side_obj.rs_per_game, 2),
+                "场均失分": round(side_obj.ra_per_game, 2),
+                "畢達哥拉斯勝率": side_obj.pythagorean_win_pct,
+                "賽季勝率": side_obj.season_win_pct,
+                "近況勝率": side_obj.recent_win_pct,
+                "Log5單場勝率": side_obj.log5_matchup_win_pct,
+                "Beta-Binomial": _side("beta", side_key),
+                "貝氏近況修正": side_obj.bayesian_win_pct,
+                "馬可夫鏈 Hot/Cold": _side("markov", side_key),
+                "前次交鋒 H2H PK": _side("h2h", side_key),
+                "集成後驗（傷兵前）": _side("ensemble", side_key),
+                "傷兵修正": f.home_injury_adj if side_key == "home" else f.away_injury_adj,
+                "傷兵後勝率": _side("injury", side_key),
+                "球員數據 PK": _side("player_pk", side_key),
+                "MC 模擬後驗": _side("mc", side_key),
+                "最終 PK 修正勝率": f.home_win_prob if side_key == "home" else f.away_win_prob,
             }
         )
     return pd.DataFrame(rows)

@@ -206,8 +206,10 @@ def _render_forecast_card(
 
         detail = team_detail_dataframe(fc).copy()
         pct_cols = [
-            "畢達哥拉斯勝率", "賽季勝率", "近況勝率", "Log5單場勝率", "貝氏修正勝率",
-            "傷兵前勝率", "傷兵修正", "最終預測勝率",
+            "畢達哥拉斯勝率", "賽季勝率", "近況勝率", "Log5單場勝率",
+            "Beta-Binomial", "貝氏近況修正", "馬可夫鏈 Hot/Cold", "前次交鋒 H2H PK",
+            "集成後驗（傷兵前）", "傷兵修正", "傷兵後勝率", "球員數據 PK",
+            "MC 模擬後驗", "最終 PK 修正勝率",
         ]
         for col in pct_cols:
             if col == "傷兵修正":

@@ -269,6 +269,11 @@ def inject_dashboard_theme() -> None:
             font-weight: 700;
             color: var(--sq-primary);
         }
+        .sq-rating-table tbody tr.sq-rating-final .sq-rating-val {
+            font-weight: 700;
+            color: var(--sq-primary);
+            border-top: 2px solid var(--sq-border);
+        }
 
         /* 盤口面板 */
         .sq-odds-panel {

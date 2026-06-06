@@ -81,15 +81,65 @@ def _pct(v: float | None) -> str:
     return f"{v * 100:.1f}%"
 
 
+def _rebuild_prob_breakdown(fc: Any) -> Any | None:
+    """DB 還原的 forecast 若缺 prob_breakdown，用已存 stats 重算 Markov/Beta/H2H。"""
+    pb = getattr(fc, "prob_breakdown", None)
+    if pb is not None:
+        return pb
+    home = fc.home
+    away = fc.away
+    if not home.rs_per_game or not away.rs_per_game:
+        return None
+    try:
+        from sportsbet.data.database import SportsDatabase
+        from sportsbet.models.analytics_engine import AnalyticsEngine
+        from sportsbet.models.probability_engine import ensemble_matchup_probability
+
+        db = SportsDatabase()
+        eng = AnalyticsEngine(fc.sport)
+        return ensemble_matchup_probability(
+            eng,
+            fc.sport,
+            fc.home_team,
+            fc.away_team,
+            home.rs_per_game,
+            home.ra_per_game,
+            away.rs_per_game,
+            away.ra_per_game,
+            fc.match_date,
+            home_games=int(home.games or 0),
+            away_games=int(away.games or 0),
+            home_season_win_pct=home.season_win_pct,
+            away_season_win_pct=away.season_win_pct,
+            home_recent_win_pct=home.recent_win_pct,
+            away_recent_win_pct=away.recent_win_pct,
+            db=db,
+        )
+    except Exception:
+        return None
+
+
+def ensure_forecast_pipeline(fc: Any) -> BayesianForecastPipeline:
+    """取得或組裝完整管線（供 UI 評分明細）。"""
+    pipeline = getattr(fc, "pipeline", None)
+    if pipeline is not None and pipeline.stages:
+        return pipeline
+    pipeline = build_pipeline_from_forecast(fc)
+    fc.pipeline = pipeline
+    return pipeline
+
+
 def build_pipeline_from_forecast(fc: Any) -> BayesianForecastPipeline:
     """由 GameForecast 組裝完整管線分解。"""
-    from sportsbet.models.player_scoring import _team_lineup_expected_points
+    from sportsbet.models.player_scoring import (
+        _team_lineup_expected_points,
+        player_matchup_win_prob,
+    )
 
     home = fc.home
     away = fc.away
-    pb = getattr(fc, "prob_breakdown", None)
+    pb = _rebuild_prob_breakdown(fc)
     sim = getattr(fc, "sim_result", None)
-    db = None  # player pts estimated only if we had db on fc — pass via optional attrs
 
     h2h_pct = None
     if pb and getattr(pb, "context", None):
@@ -180,6 +230,30 @@ def build_pipeline_from_forecast(fc: Any) -> BayesianForecastPipeline:
         )
     )
 
+    ph = pa = None
+    if fc.game_id and fc.sport == "nba":
+        try:
+            from sportsbet.data.database import SportsDatabase
+
+            db = SportsDatabase()
+            ph = _team_lineup_expected_points(db, "nba", fc.home_team, fc.match_date)
+            pa = _team_lineup_expected_points(db, "nba", fc.away_team, fc.match_date)
+        except Exception:
+            pass
+
+    player_pk = player_matchup_win_prob(ph, pa)
+    player_note = ""
+    if ph is not None and pa is not None:
+        player_note = f"近況估分 主 {ph:.0f} · 客 {pa:.0f}"
+    stages.append(
+        PipelineStage(
+            "player_pk", "⑩b 球員數據 PK", "box score λ",
+            player_pk[0] if player_pk else None,
+            player_pk[1] if player_pk else None,
+            player_note or "無 box score / 陣容連結 · 不輸出虛構值",
+        )
+    )
+
     if sim is not None:
         stages.append(
             PipelineStage(
@@ -191,22 +265,11 @@ def build_pipeline_from_forecast(fc: Any) -> BayesianForecastPipeline:
 
     stages.append(
         PipelineStage(
-            "final", "⑫ 最終 PK 勝率", "決策後驗",
+            "final", "⑫ 最終 PK 修正勝率", "決策後驗",
             fc.home_win_prob, fc.away_win_prob,
-            "集成 × 傷兵 × MC 混合",
+            "Log5+Bayes+Markov+H2H → 傷兵 → 球員λ → MC 混合",
         )
     )
-
-    ph = pa = None
-    if fc.game_id and fc.sport == "nba":
-        try:
-            from sportsbet.data.database import SportsDatabase
-
-            db = SportsDatabase()
-            ph = _team_lineup_expected_points(db, "nba", fc.home_team, fc.match_date)
-            pa = _team_lineup_expected_points(db, "nba", fc.away_team, fc.match_date)
-        except Exception:
-            pass
 
     return BayesianForecastPipeline(
         sport=fc.sport,
