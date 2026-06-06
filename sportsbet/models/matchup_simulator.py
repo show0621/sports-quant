@@ -152,8 +152,11 @@ def blend_lambdas_with_h2h(
     *,
     blend: float = 0.25,
     limit: int = 8,
+    playoff_series: bool = False,
 ) -> tuple[float, float]:
-    """混入近期對戰場均得分（季後賽同對手連戰）。"""
+    """混入近期對戰場均得分（季後賽同對手 ≥1 場即混入 G1 比分）。"""
+    from sportsbet import config
+
     with db.connection() as conn:
         rows = conn.execute(
             """
@@ -173,7 +176,10 @@ def blend_lambdas_with_h2h(
             """,
             (sport, str(match_date)[:10], home_team, away_team, away_team, home_team, limit),
         ).fetchall()
-    if len(rows) < 2:
+    min_games = (
+        config.MC_H2H_PLAYOFF_MIN_GAMES if playoff_series else config.MC_H2H_REGULAR_MIN_GAMES
+    )
+    if len(rows) < min_games:
         return lam_home, lam_away
 
     h_pts: list[float] = []
@@ -190,5 +196,8 @@ def blend_lambdas_with_h2h(
 
     avg_h = sum(h_pts) / len(h_pts)
     avg_a = sum(a_pts) / len(a_pts)
-    w = min(max(blend, 0.0), 0.5)
+    if playoff_series and len(rows) == 1:
+        w = min(max(config.MC_H2H_PLAYOFF_SINGLE_BLEND, 0.0), 0.55)
+    else:
+        w = min(max(blend, 0.0), 0.5)
     return (1 - w) * lam_home + w * avg_h, (1 - w) * lam_away + w * avg_a

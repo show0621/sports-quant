@@ -141,6 +141,28 @@ class PredictionService:
 
         return forecasts_to_matchup_table(forecasts)
 
+    def recompute_scheduled_games(
+        self,
+        sport: Sport,
+        games: pd.DataFrame,
+    ) -> int:
+        """重算指定 scheduled 場次（含 G1 後更新 G2）。"""
+        if games.empty:
+            return 0
+        self._refresh_team_stats(sport)
+        builder = PointInTimeStatsBuilder.from_db(self.db, sport)
+        fallback = self.db.get_team_stats(sport).set_index("team")
+        n = 0
+        for _, g in games.drop_duplicates(subset=["id"]).iterrows():
+            stats = self._stats_for_game(sport, g, builder, fallback)
+            gid = int(g["id"])
+            line = self.db.get_market_line(gid, "total")
+            fc = self.forecast_game_row(sport, g, stats, total_line=line, use_roster=True)
+            if fc:
+                self.db.upsert_game_forecast(fc)
+                n += 1
+        return n
+
     def get_review_table(self, sport: Sport, *, final_only: bool = True) -> pd.DataFrame:
         from sportsbet.data.team_names import is_cross_sport_game, team_belongs_to_sport
 

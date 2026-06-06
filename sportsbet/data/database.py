@@ -1146,13 +1146,12 @@ class SportsDatabase:
             )
             return cur.rowcount
 
-    def finalize_games_with_scores(self, sport: Sport) -> int:
-        """將已有有效比分且賽日不晚於今日的賽事標記為 final。"""
+    def finalize_games_with_scores(self, sport: Sport) -> list[int]:
+        """將已有有效比分且賽日不晚於今日的賽事標記為 final，回傳本次新完賽 game id。"""
         with self.connection() as conn:
-            cur = conn.execute(
+            rows = conn.execute(
                 """
-                UPDATE games
-                SET status = 'final'
+                SELECT id FROM games
                 WHERE sport = ?
                   AND home_score IS NOT NULL
                   AND away_score IS NOT NULL
@@ -1161,8 +1160,15 @@ class SportsDatabase:
                   AND (status IS NULL OR status NOT IN ('final', 'FT', 'AOT', 'Finished', 'POST'))
                 """,
                 (sport,),
-            )
-            return cur.rowcount
+            ).fetchall()
+            ids = [int(r["id"]) for r in rows]
+            if ids:
+                placeholders = ",".join("?" for _ in ids)
+                conn.execute(
+                    f"UPDATE games SET status = 'final' WHERE id IN ({placeholders})",
+                    ids,
+                )
+            return ids
 
     def count_games_with_scores(self, sport: Sport) -> int:
         with self.connection() as conn:
@@ -1403,6 +1409,48 @@ class SportsDatabase:
                 conn,
                 params=game_ids,
             )
+
+    def get_rematch_games_after_finals(
+        self,
+        sport: Sport,
+        finalized_game_ids: list[int],
+    ) -> pd.DataFrame:
+        """同對手系列賽：完賽後尚未開打的下一場（如 G1 後重算 G2）。"""
+        if not finalized_game_ids:
+            return pd.DataFrame()
+        finals = self.get_games_by_ids(finalized_game_ids)
+        if finals.empty:
+            return pd.DataFrame()
+        scheduled = (
+            "scheduled", "pre", "Pre-Game", "in_progress", "STATUS_IN_PROGRESS",
+        )
+        ph = ",".join("?" for _ in scheduled)
+        parts: list[pd.DataFrame] = []
+        for _, g in finals.iterrows():
+            ht, at = str(g["home_team"]), str(g["away_team"])
+            after = str(g["match_date"])[:10]
+            with self.connection() as conn:
+                df = pd.read_sql_query(
+                    f"""
+                    SELECT * FROM games
+                    WHERE sport = ?
+                      AND match_date > ?
+                      AND status IN ({ph})
+                      AND (
+                            (home_team = ? AND away_team = ?)
+                         OR (home_team = ? AND away_team = ?)
+                      )
+                    ORDER BY match_date, id
+                    """,
+                    conn,
+                    params=(sport, after, *scheduled, ht, at, at, ht),
+                )
+            if not df.empty:
+                parts.append(df)
+        if not parts:
+            return pd.DataFrame()
+        out = pd.concat(parts, ignore_index=True).drop_duplicates(subset=["id"])
+        return out.sort_values(["match_date", "id"]).reset_index(drop=True)
 
     def get_dates_needing_backtest_work(self, sport: Sport, *, days_back: int) -> list[str]:
         """

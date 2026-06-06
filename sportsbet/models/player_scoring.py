@@ -8,6 +8,8 @@ from sportsbet.data.database import SportsDatabase
 
 Sport = Literal["nba", "mlb"]
 
+_NBA_REGULATION_MIN = 48.0
+
 
 def _team_lineup_expected_points(
     db: SportsDatabase,
@@ -40,15 +42,12 @@ def _team_lineup_expected_points(
         if recent.empty or recent["points"].isna().all():
             continue
         avg_pts = float(recent["points"].dropna().mean())
-        avg_min = float(recent["minutes"].dropna().mean()) if "minutes" in recent.columns else 0.0
-        if avg_min < 8:
-            avg_min = 28.0
-        pts_sum += avg_pts * (exp_min / avg_min)
+        pts_sum += avg_pts * (exp_min / _NBA_REGULATION_MIN)
         covered_min += exp_min
     if covered_min < 60:
         return None
     est = pts_sum
-    if est < 70 or est > 150:
+    if est < 55 or est > 150:
         return None
     return est
 
@@ -60,7 +59,7 @@ def player_matchup_win_prob(
     """由兩隊球員近況估分推算 PK 勝率（需合理得分區間）。"""
     if home_pts is None or away_pts is None:
         return None
-    if home_pts < 70 or away_pts < 70:
+    if home_pts < 55 or away_pts < 55:
         return None
     total = home_pts + away_pts
     if total <= 0:

@@ -15,6 +15,27 @@ logger = logging.getLogger(__name__)
 Sport = Literal["nba"]
 
 
+def sync_box_scores_for_games(
+    db: SportsDatabase,
+    games: pd.DataFrame,
+    *,
+    pause_sec: float = 0.15,
+) -> dict[str, int]:
+    """同步指定完賽場次的 box score（G1 完賽後立即拉球員數據）。"""
+    if games.empty:
+        return {"boxscore_games": 0, "boxscore_players": 0}
+    client = EspnBoxScoreClient()
+    synced_games = 0
+    player_rows = 0
+    for _, g in games.iterrows():
+        n = client.sync_game_box_score(db, "nba", g)
+        if n > 0:
+            synced_games += 1
+            player_rows += n
+        time.sleep(pause_sec)
+    return {"boxscore_games": synced_games, "boxscore_players": player_rows}
+
+
 def sync_nba_box_scores(
     db: SportsDatabase,
     *,

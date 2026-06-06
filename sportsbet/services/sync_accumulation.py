@@ -54,7 +54,15 @@ def accumulate_after_sync(db: SportsDatabase, sport: Sport) -> dict[str, int]:
     從 ledger 起始日起的每場完賽都會累積進歷史表。
     """
     out: dict[str, int] = {"finalized": 0, "ledger_post": 0, "reconciled_finals": 0, "predictions": 0}
-    out["finalized"] = db.finalize_games_with_scores(sport)
+    finalized_ids = db.finalize_games_with_scores(sport)
+    out["finalized"] = len(finalized_ids)
+
+    if finalized_ids:
+        from sportsbet.services.post_final_refresh import refresh_after_finals
+
+        post = refresh_after_finals(db, sport, finalized_ids)
+        out["post_final_box_games"] = int(post.get("post_final_box_games", 0))
+        out["post_final_reforecast"] = int(post.get("post_final_reforecast", 0))
 
     if not config.GAME_LEDGER_ENABLED:
         return out

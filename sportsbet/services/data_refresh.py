@@ -123,11 +123,15 @@ def sync_historical_games(
             d += timedelta(days=1)
 
     finalized = db.finalize_games_with_scores(sport)
+    if finalized:
+        from sportsbet.services.post_final_refresh import refresh_after_finals
+
+        refresh_after_finals(db, sport, finalized)
     after = db.count_games_with_scores(sport)
     db.set_backtest_sync_meta(sport, "historical_synced_at", date.today().isoformat())
     logger.info(
         "歷史賽果同步 sport=%s season=%s games_with_scores=%d finalized=%d incremental=%s",
-        sport, season, after, finalized, incremental,
+        sport, season, after, len(finalized), incremental,
     )
     return after
 

@@ -357,9 +357,14 @@ def build_game_forecast(
             blend_lambdas_with_h2h,
         )
 
+        _playoff = bool(
+            (season_type and "季後" in str(season_type))
+            or (competition_note and ("總冠軍" in str(competition_note) or "季後" in str(competition_note)))
+        )
         lam_h, lam_a = blend_lambdas_with_h2h(
             db, sport, home_team, away_team, match_date, lam_h, lam_a,
             blend=config.MC_H2H_LAMBDA_BLEND,
+            playoff_series=_playoff,
         )
         from sportsbet.models.player_scoring import blend_lambdas_with_lineup_scoring
 

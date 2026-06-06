@@ -68,6 +68,14 @@ class LiveSyncService:
             player_stats = self.orch.sync_players(sport, days_lineup=days, force=False)
             out.update({k: int(v) for k, v in player_stats.items()})
 
+            finalized_ids = self.db.finalize_games_with_scores(sport)
+            out["finalized"] = len(finalized_ids)
+            if finalized_ids:
+                from sportsbet.services.post_final_refresh import refresh_after_finals
+
+                post = refresh_after_finals(self.db, sport, finalized_ids)
+                out.update({k: int(v) for k, v in post.items()})
+
             svc = PredictionService(self.db)
             forecasts = svc.run_upcoming(sport, days_ahead=days)
             out["forecasts"] = len(forecasts)
@@ -81,7 +89,7 @@ class LiveSyncService:
                 bs = sync_nba_box_scores(
                     self.db,
                     regular_days_back=21,
-                    max_finals=30,
+                    max_finals=10,
                     max_regular=40,
                 )
                 out.update({k: int(v) for k, v in bs.items()})
