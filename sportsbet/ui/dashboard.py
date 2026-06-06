@@ -581,7 +581,7 @@ def main() -> None:
         ["即時賽況", "賽事預測", "歷史覆盤", "球員熱區", "投注訊號", "模型健康", "資金回測"]
     )
     with tab0:
-        render_live_scoreboard(get_db(), sport)
+        render_live_scoreboard(get_db(), sport, get_prediction_service())
         st.divider()
         page_live_monitor(get_db(), sport, get_prediction_service())
     with tab1:

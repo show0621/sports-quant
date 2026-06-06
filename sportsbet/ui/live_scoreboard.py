@@ -1,23 +1,35 @@
-"""即時比分看板（ESPN 同步 + 動態賽況）。"""
+"""即時比分看板（ESPN 同步 + 模型預測）。"""
 from __future__ import annotations
 
 from datetime import date, timedelta
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 import streamlit as st
 
 from sportsbet.data.database import SportsDatabase
 from sportsbet.data.team_logos import resolve_logo_url
+from sportsbet.data.team_names import team_bilingual
 from sportsbet.ui.matchup_display import (
     format_match_datetime,
     render_season_badges_html,
     taipei_match_date,
     team_bilingual_html,
 )
+from sportsbet.ui.odds_display import summarize_game_odds
+
+if TYPE_CHECKING:
+    from sportsbet.services.prediction_service import PredictionService
 
 
 def _sport_emoji(sport: str) -> str:
     return "🏀" if sport == "nba" else "⚾"
+
+
+def _pct(v: float | None) -> str:
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return "—"
+    return f"{float(v) * 100:.1f}%"
 
 
 def _fetch_today_games(db: SportsDatabase, sport: str) -> pd.DataFrame:
@@ -47,7 +59,151 @@ def _fetch_today_games(db: SportsDatabase, sport: str) -> pd.DataFrame:
     ]
 
 
-def render_live_scoreboard(db: SportsDatabase, sport: str) -> None:
+def _load_forecast(
+    db: SportsDatabase,
+    sport: str,
+    g: pd.Series,
+    svc: PredictionService | None,
+) -> dict[str, Any] | None:
+    gid = int(g["id"])
+    row = db.get_game_forecast_row(gid)
+    if row is not None and pd.notna(row.get("predicted_winner")):
+        return row.to_dict()
+
+    if svc is None:
+        return None
+    stats = svc.db.get_team_stats(sport).set_index("team")
+    ht, at = g["home_team"], g["away_team"]
+    if ht not in stats.index or at not in stats.index:
+        return None
+    line = db.get_market_line(gid, "total")
+    fc = svc.forecast_game_row(sport, g, stats, total_line=line)
+    if not fc:
+        return None
+    return {
+        "predicted_winner": fc.predicted_winner,
+        "home_win_prob": fc.home_win_prob,
+        "away_win_prob": fc.away_win_prob,
+        "predicted_margin": fc.predicted_margin,
+        "predicted_total": fc.predicted_total,
+        "total_line": fc.total_line,
+        "prob_over": fc.prob_over,
+        "prob_under": fc.prob_under,
+        "predicted_home_score": fc.predicted_home_score,
+        "predicted_away_score": fc.predicted_away_score,
+        "pick_correct": fc.pick_correct,
+        "home_team": fc.home_team,
+        "away_team": fc.away_team,
+    }
+
+
+def _winner_label(name: str, sport: str, prob: float | None) -> str:
+    en, zh = team_bilingual(name, sport)
+    show = f"{en} / {zh}" if zh else en
+    if prob is not None and not pd.isna(prob):
+        return f"{show} ({_pct(prob)})"
+    return show
+
+
+def _render_prediction_strip(
+    db: SportsDatabase,
+    sport: str,
+    g: pd.Series,
+    fc: dict[str, Any] | None,
+    *,
+    status: str,
+) -> None:
+    if not fc:
+        st.markdown(
+            "<div class='sq-pred-strip sq-pred-empty'>"
+            "尚無模型預測 · 請執行「完整同步」或 watch 更新</div>",
+            unsafe_allow_html=True,
+        )
+        return
+
+    winner = str(fc.get("predicted_winner") or "—")
+    home = str(g["home_team"])
+    away = str(g["away_team"])
+    if winner == home:
+        win_prob = fc.get("home_win_prob")
+    elif winner == away:
+        win_prob = fc.get("away_win_prob")
+    else:
+        win_prob = None
+
+    margin = fc.get("predicted_margin")
+    margin_txt = "—"
+    if margin is not None and not pd.isna(margin):
+        m = float(margin)
+        if m > 0:
+            margin_txt = f"主隊淨勝 {m:+.1f}"
+        elif m < 0:
+            margin_txt = f"客隊淨勝 {-m:.1f}"
+        else:
+            margin_txt = "平手"
+
+    pred_score = ""
+    ph, pa = fc.get("predicted_home_score"), fc.get("predicted_away_score")
+    if ph is not None and pa is not None and not pd.isna(ph) and not pd.isna(pa):
+        pred_score = f" · 預估比分 {int(ph)}–{int(pa)}"
+
+    total_line = fc.get("total_line")
+    odds = summarize_game_odds(db, int(g["id"]))
+    market_line = odds.get("total_line") if odds.get("total_line") is not None else total_line
+    pred_total = fc.get("predicted_total")
+    prob_over = fc.get("prob_over")
+
+    total_parts: list[str] = []
+    if pred_total is not None and not pd.isna(pred_total):
+        total_parts.append(f"預估總分 {float(pred_total):.1f}")
+    if market_line is not None and not pd.isna(market_line):
+        total_parts.append(f"盤口 {float(market_line):.1f}")
+    if prob_over is not None and not pd.isna(prob_over):
+        under = fc.get("prob_under")
+        if under is None or pd.isna(under):
+            under = 1.0 - float(prob_over)
+        total_parts.append(f"大 {_pct(prob_over)} / 小 {_pct(under)}")
+    total_txt = " · ".join(total_parts) if total_parts else "—"
+
+    result_tag = ""
+    if status == "final" and fc.get("pick_correct") is not None:
+        result_tag = (
+            "<span class='sq-pred-hit sq-pred-ok'>✓ 預測正確</span>"
+            if fc.get("pick_correct")
+            else "<span class='sq-pred-hit sq-pred-miss'>✗ 預測錯誤</span>"
+        )
+
+    total_label = "大小分" if sport == "nba" else "大小分（總得分）"
+    st.markdown(
+        f"""
+        <div class="sq-pred-strip">
+            <div class="sq-pred-grid">
+                <div class="sq-pred-cell">
+                    <div class="sq-pred-label">勝負預測</div>
+                    <div class="sq-pred-value">{_winner_label(winner, sport, win_prob)}{pred_score}</div>
+                    <div class="sq-pred-sub">主 {_pct(fc.get('home_win_prob'))} · 客 {_pct(fc.get('away_win_prob'))}</div>
+                </div>
+                <div class="sq-pred-cell">
+                    <div class="sq-pred-label">勝分差預測</div>
+                    <div class="sq-pred-value">{margin_txt}</div>
+                </div>
+                <div class="sq-pred-cell">
+                    <div class="sq-pred-label">{total_label}</div>
+                    <div class="sq-pred-value">{total_txt}</div>
+                </div>
+            </div>
+            {result_tag}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_live_scoreboard(
+    db: SportsDatabase,
+    sport: str,
+    svc: PredictionService | None = None,
+) -> None:
     today = date.today().isoformat()
     games = _fetch_today_games(db, sport)
     if games.empty:
@@ -60,7 +216,7 @@ def render_live_scoreboard(db: SportsDatabase, sport: str) -> None:
     st.markdown(
         f"<div class='sq-hero'><h1>{_sport_emoji(sport)} 今日賽事速報</h1>"
         f"<p>{today}（台灣）· 共 {len(games)} 場 · 進行中 {live_n} · 已完賽 {final_n}"
-        f" · 資料 ESPN / 玩運彩</p></div>",
+        f" · 含模型勝負 / 勝分差 / 大小分預測</p></div>",
         unsafe_allow_html=True,
     )
 
@@ -96,6 +252,7 @@ def render_live_scoreboard(db: SportsDatabase, sport: str) -> None:
 
         home_logo = resolve_logo_url(g["home_team"], sport, db_url=g.get("home_logo_url"))
         away_logo = resolve_logo_url(g["away_team"], sport, db_url=g.get("away_logo_url"))
+        fc = _load_forecast(db, sport, g, svc)
 
         st.markdown(f"<div class='{card_cls}'>", unsafe_allow_html=True)
         col_a, col_mid, col_b = st.columns([2, 1.2, 2])
@@ -121,4 +278,6 @@ def render_live_scoreboard(db: SportsDatabase, sport: str) -> None:
                 unsafe_allow_html=True,
             )
             st.caption("主場")
+
+        _render_prediction_strip(db, sport, g, fc, status=status)
         st.markdown("</div>", unsafe_allow_html=True)

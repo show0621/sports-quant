@@ -159,6 +159,60 @@ def inject_dashboard_theme() -> None:
             margin-top: 0.08rem;
         }
 
+        /* 即時賽況 · 模型預測列 */
+        .sq-pred-strip {
+            margin-top: 0.75rem;
+            padding-top: 0.75rem;
+            border-top: 1px dashed var(--sq-border);
+        }
+        .sq-pred-strip.sq-pred-empty {
+            font-size: 0.82rem;
+            color: var(--sq-muted);
+            padding: 0.5rem 0 0.15rem;
+        }
+        .sq-pred-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 0.55rem;
+        }
+        @media (max-width: 768px) {
+            .sq-pred-grid { grid-template-columns: 1fr; }
+        }
+        .sq-pred-cell {
+            background: #f8fafc;
+            border: 1px solid var(--sq-border-light);
+            border-radius: 10px;
+            padding: 0.55rem 0.7rem;
+        }
+        .sq-pred-label {
+            font-size: 0.72rem;
+            font-weight: 700;
+            color: var(--sq-brand);
+            letter-spacing: 0.06em;
+            margin-bottom: 0.2rem;
+        }
+        .sq-pred-value {
+            font-size: 0.88rem;
+            font-weight: 600;
+            color: var(--sq-ink);
+            line-height: 1.35;
+        }
+        .sq-pred-sub {
+            font-size: 0.74rem;
+            color: var(--sq-muted);
+            margin-top: 0.15rem;
+        }
+        .sq-pred-hit {
+            display: inline-block;
+            margin-top: 0.45rem;
+            font-size: 0.78rem;
+            font-weight: 600;
+            padding: 0.12rem 0.5rem;
+            border-radius: 999px;
+        }
+        .sq-pred-ok { background: #dcfce7; color: #166534; }
+        .sq-pred-miss { background: #fee2e2; color: #991b1b; }
+
         /* 盤口面板 */
         .sq-odds-panel {
             background: #f8fafc;
