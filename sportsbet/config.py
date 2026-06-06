@@ -153,6 +153,29 @@ MC_H2H_LAMBDA_BLEND = float(os.getenv("MC_H2H_LAMBDA_BLEND", "0.25"))
 MC_H2H_PLAYOFF_SINGLE_BLEND = float(os.getenv("MC_H2H_PLAYOFF_SINGLE_BLEND", "0.38"))
 MC_H2H_REGULAR_MIN_GAMES = int(os.getenv("MC_H2H_REGULAR_MIN_GAMES", "2"))
 MC_H2H_PLAYOFF_MIN_GAMES = int(os.getenv("MC_H2H_PLAYOFF_MIN_GAMES", "1"))
+# --- 大小分 / 勝率校準（回測顯示 Poisson 大小分過度自信）---
+TOTAL_EDGE_SIGMA: dict[str, float] = {
+    "nba": float(os.getenv("TOTAL_EDGE_SIGMA_NBA", "15.0")),
+    "mlb": float(os.getenv("TOTAL_EDGE_SIGMA_MLB", "4.8")),
+}
+TOTAL_LINE_BLEND: dict[str, float] = {
+    "nba": float(os.getenv("TOTAL_LINE_BLEND_NBA", "0.55")),
+    "mlb": float(os.getenv("TOTAL_LINE_BLEND_MLB", "0.65")),
+}
+TOTAL_PROB_SHRINK: dict[str, float] = {
+    "nba": float(os.getenv("TOTAL_PROB_SHRINK_NBA", "0.50")),
+    "mlb": float(os.getenv("TOTAL_PROB_SHRINK_MLB", "0.38")),
+}
+TOTAL_MARKET_BLEND = float(os.getenv("TOTAL_MARKET_BLEND", "0.40"))
+ML_PROB_SHRINK: dict[str, float] = {
+    "nba": float(os.getenv("ML_PROB_SHRINK_NBA", "0.82")),
+    "mlb": float(os.getenv("ML_PROB_SHRINK_MLB", "0.35")),
+}
+# 資金回測：MLB 勝率模型與實際相關性低，暫不納入 moneyline
+BANKROLL_MARKETS: dict[str, tuple[str, ...]] = {
+    "nba": ("moneyline", "total", "spread"),
+    "mlb": ("total",),
+}
 BOXSCORE_REGULAR_DAYS_BACK = int(os.getenv("BOXSCORE_REGULAR_DAYS_BACK", "365"))
 LINEUP_SCORING_BLEND = float(os.getenv("LINEUP_SCORING_BLEND", "0.22"))
 MARKOV_B2B_EDGE = float(os.getenv("MARKOV_B2B_EDGE", "0.03"))

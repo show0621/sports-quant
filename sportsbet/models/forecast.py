@@ -444,12 +444,36 @@ def build_game_forecast(
             prob_o = engine.prob_total_over(market_line, lam_h, lam_a)
             prob_u = 1.0 - prob_o
 
+    mc_prob_over = sim_result.prob_over if sim_result is not None else None
     if sim_result is not None:
-        if sim_result.prob_over is not None:
-            prob_o = sim_result.prob_over
-            prob_u = sim_result.prob_under
         home_prob = 0.65 * home_prob + 0.35 * sim_result.home_win_prob
         away_prob = 1.0 - home_prob
+
+    from sportsbet.models.calibration import (
+        calibrate_total_prob,
+        calibrate_win_prob,
+        market_implied_over_prob,
+    )
+
+    home_prob = calibrate_win_prob(home_prob, sport)
+    away_prob = 1.0 - home_prob
+
+    if market_line is not None and prob_o is not None:
+        mkt_implied = None
+        if db is not None and game_id and hasattr(db, "get_game_odds"):
+            try:
+                mkt_implied = market_implied_over_prob(db.get_game_odds(game_id))
+            except Exception:
+                mkt_implied = None
+        prob_o = calibrate_total_prob(
+            market_line,
+            pred_total,
+            sport,
+            poisson_prob=prob_o,
+            mc_prob=mc_prob_over,
+            market_implied=mkt_implied,
+        )
+        prob_u = 1.0 - prob_o
 
     winner = home_team if home_prob >= away_prob else away_team
     unit = "分" if sport == "nba" else "分"

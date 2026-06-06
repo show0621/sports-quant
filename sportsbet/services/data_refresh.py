@@ -143,7 +143,9 @@ def rebuild_predictions_from_forecasts(
     game_ids: list[int] | None = None,
     replace_all: bool = False,
 ) -> int:
-    """依 game_forecasts 的傷兵修正勝率重建 predictions（供模型健康度/資金回測）。"""
+    """依 game_forecasts 重建 predictions（含機率校準，供模型健康度/資金回測）。"""
+    from sportsbet.models.calibration import calibrate_total_prob, calibrate_win_prob
+
     game_filter = ""
     params: list = [sport]
     if game_ids:
@@ -154,8 +156,10 @@ def rebuild_predictions_from_forecasts(
     with db.connection() as conn:
         rows = conn.execute(
             f"""
-            SELECT g.id AS game_id, g.match_date, f.home_win_prob, f.away_win_prob,
-                   f.prob_over, o.market, o.selection, o.odds, o.handicap
+            SELECT g.id AS game_id, g.sport, g.match_date,
+                   f.home_win_prob, f.away_win_prob,
+                   f.prob_over, f.predicted_total, f.total_line,
+                   o.market, o.selection, o.odds, o.handicap
             FROM games g
             JOIN game_forecasts f ON f.game_id = g.id
             JOIN odds o ON o.game_id = g.id
@@ -188,10 +192,23 @@ def rebuild_predictions_from_forecasts(
         for row in rows:
             market = row["market"]
             sel = row["selection"]
+            row_sport = str(row["sport"])
             if market == "moneyline":
                 prob = float(row["home_win_prob"]) if sel == "home" else float(row["away_win_prob"])
+                prob = calibrate_win_prob(prob, row_sport)  # type: ignore[arg-type]
             elif market == "total" and row["prob_over"] is not None:
-                prob_o = float(row["prob_over"])
+                line = row["handicap"]
+                if line is None:
+                    line = row["total_line"]
+                pred_total = row["predicted_total"]
+                if line is None or pred_total is None:
+                    continue
+                prob_o = calibrate_total_prob(
+                    float(line),
+                    float(pred_total),
+                    row_sport,  # type: ignore[arg-type]
+                    poisson_prob=float(row["prob_over"]),
+                )
                 prob = prob_o if sel == "over" else 1.0 - prob_o
             else:
                 continue

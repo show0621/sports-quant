@@ -580,7 +580,7 @@ def page_bankroll(sport: str) -> None:
     st.header("資金回測模擬 (Bankroll Simulation)")
     st.caption(
         f"起始 NT$ {config.INITIAL_BANKROLL/10000:.0f}萬 · "
-        f"每場僅下注 EV 最高且 > 0 的單一玩法 · "
+        f"每場僅下注 EV 最高且 > {config.MIN_EV_THRESHOLD:.0%} 的單一玩法 · "
         f"凱利 f*×{config.KELLY_FRACTION:g}（上限 {config.MAX_BET_FRACTION:.0%}）· 依日期序"
     )
 
@@ -595,10 +595,15 @@ def page_bankroll(sport: str) -> None:
         st.warning("尚無可回測的預測與賽果。")
         return
 
+    allowed = config.BANKROLL_MARKETS.get(sport, ("moneyline", "total", "spread"))
     market_opts = {"全部": "all", "勝負": "moneyline", "大小分": "total", "讓分": "spread"}
+    if sport == "mlb" and "moneyline" not in allowed:
+        st.info("MLB 勝率模型校準不足，回測預設僅含大小盤；勝負盤可手動篩選檢視。")
     market_label = st.selectbox("盤口篩選", list(market_opts.keys()), index=0)
     market_key = market_opts[market_label]
-    if market_key != "all":
+    if market_key == "all":
+        df = df[df["market"].isin(allowed)].copy()
+    else:
         df = df[df["market"] == market_key].copy()
 
     if df.empty:
@@ -613,7 +618,7 @@ def page_bankroll(sport: str) -> None:
             lambda r: risk.expected_value(float(r["model_prob"]), float(r["odds"])), axis=1
         )
 
-    evaluator = EvaluationModule(min_ev=0.0)
+    evaluator = EvaluationModule(min_ev=config.MIN_EV_THRESHOLD)
     report = evaluator.run_full_evaluation(df)
     summary = report.backtest_summary
 
@@ -625,6 +630,15 @@ def page_bankroll(sport: str) -> None:
     c4.metric("下注場次", summary.get("total_trades", 0))
     c5.metric("總損益", format_compact_twd(summary.get("total_pnl", 0), signed=True))
     st.markdown("</div>", unsafe_allow_html=True)
+
+    roi = float(summary.get("roi", 0))
+    if roi < 0 and not report.trades.empty:
+        t = report.trades
+        st.warning(
+            f"回測虧損（ROI {format_compact_pct(roi, signed=True)}）。"
+            f"模型勝率 {t['prob'].mean():.0%} vs 實際 {t['won'].mean():.0%}；"
+            f"常見原因：大小分 Poisson 過度自信、或勝率與賽果相關性不足。"
+        )
 
     eq = report.equity_curve.reset_index(drop=True)
     eq_df = pd.DataFrame({"step": eq.index, "equity": eq.values})
