@@ -252,7 +252,22 @@ def page_backtest_review(sport: str) -> None:
 
     svc = get_prediction_service()
     db = get_db()
-    if st.button("重新產生全部覆盤紀錄", type="primary"):
+    bc1, bc2 = st.columns(2)
+    with bc1:
+        full_refresh = st.button("重新產生全部覆盤紀錄", type="primary")
+    with bc2:
+        bayes_recalc = st.button("僅重算預測（今日+歷史，貝氏模型）", type="secondary")
+    if bayes_recalc:
+        with st.spinner("重算今日/未來與全部歷史覆盤（貝氏集成管線）…"):
+            stats = svc.recompute_all_forecasts(sport)
+            _persist_database(f"chore(model): bayesian recompute {sport}", db=db)
+        st.success(
+            f"預測已更新：今日/未來 {stats.get('upcoming', 0)} 場 · "
+            f"歷史覆盤 {stats.get('history', 0)} 場"
+        )
+        st.cache_resource.clear()
+        st.rerun()
+    if full_refresh:
         with st.spinner("同步歷史賽果、傷兵並重算全部覆盤…"):
             stats = run_full_backtest_refresh(db, sport, sync_api=True, sync_injuries=True)
             _persist_database(f"chore(data): full backtest refresh {sport}", db=db)
@@ -439,7 +454,11 @@ def page_daily_picks(sport: str) -> None:
 
 def page_model_health(sport: str) -> None:
     st.header("模型健康度 (Model Health)")
-    st.caption("集成模型：Log5 + 貝氏 + Beta-Binomial + 馬可夫近況 + 休息/B2B/H2H 情境")
+    from sportsbet.ui.model_methodology import render_methodology_overview
+
+    with st.expander("貝氏集成 PK 模型方法論", expanded=True):
+        render_methodology_overview()
+    st.caption("集成模型：Log5 + 貝氏 + Beta-Binomial + 馬可夫近況 + H2H + 傷兵 + MC")
     db = get_db()
     df = db.get_backtest_frame(sport)
     if df.empty:

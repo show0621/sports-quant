@@ -67,6 +67,7 @@ class GameForecast:
     competition_note: str | None = None
     sim_result: Any | None = None  # MonteCarloResult when enabled
     prob_breakdown: Any | None = None  # ProbabilityBreakdown from ensemble engine
+    pipeline: Any | None = None  # BayesianForecastPipeline
 
     def to_db_row(self) -> dict[str, Any]:
         row = {
@@ -365,7 +366,7 @@ def build_game_forecast(
         margin_error = (actual_home_score - actual_away_score) - pred_margin
         total_error = (actual_home_score + actual_away_score) - pred_total
 
-    return GameForecast(
+    fc = GameForecast(
         sport=sport,
         match_date=match_date,
         home_team=home_team,
@@ -415,6 +416,10 @@ def build_game_forecast(
         sim_result=sim_result,
         prob_breakdown=prob_breakdown,
     )
+    from sportsbet.models.bayesian_pipeline import build_pipeline_from_forecast
+
+    fc.pipeline = build_pipeline_from_forecast(fc)
+    return fc
 
 
 def forecasts_to_matchup_table(forecasts: list[GameForecast]) -> pd.DataFrame:

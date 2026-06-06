@@ -350,3 +350,22 @@ class PredictionService:
         return self.run_upcoming(sport, days_ahead=0) + self.run_upcoming(
             sport, days_ahead=14
         )
+
+    def recompute_all_forecasts(
+        self,
+        sport: Sport,
+        *,
+        days_ahead: int | None = None,
+        include_history: bool = True,
+    ) -> dict[str, int]:
+        """重算今日/未來與歷史覆盤預測（完整貝氏集成管線）。"""
+        from sportsbet import config
+
+        ahead = days_ahead if days_ahead is not None else config.SCHEDULE_SYNC_DAYS_AHEAD
+        self._refresh_team_stats(sport)
+        upcoming = self.run_upcoming(sport, days_ahead=ahead)
+        history_n = 0
+        if include_history:
+            review = self.run_backtest_reconcile(sport, only_missing=False)
+            history_n = len(review)
+        return {"upcoming": len(upcoming), "history": history_n}

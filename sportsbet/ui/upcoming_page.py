@@ -10,6 +10,7 @@ from sportsbet.data.team_names import team_bilingual
 from sportsbet.models.forecast import GameForecast, forecast_event_label, team_detail_dataframe
 from sportsbet.services.prediction_service import PredictionService
 from sportsbet.ui.matchup_display import format_match_datetime, render_matchup_header, taipei_match_date
+from sportsbet.ui.model_methodology import render_forecast_pipeline, render_methodology_overview
 from sportsbet.ui.odds_display import render_odds_panel
 
 
@@ -164,22 +165,8 @@ def _render_forecast_card(
                 f"{sim.n_sims} 次模擬"
             )
 
-        pb = getattr(fc, "prob_breakdown", None)
-        if pb is not None:
-            with st.expander("集成勝率分解（Log5 / 貝氏 / Beta / 馬可夫 / 情境）"):
-                st.dataframe(
-                    pd.DataFrame(
-                        [
-                            {"模型": "Log5", "主": _pct(pb.log5_home), "客": _pct(pb.log5_away)},
-                            {"模型": "貝氏近況", "主": _pct(pb.bayesian_home), "客": _pct(pb.bayesian_away)},
-                            {"模型": "Beta-Binomial", "主": _pct(pb.beta_home), "客": _pct(pb.beta_away)},
-                            {"模型": "馬可夫", "主": _pct(pb.markov_home), "客": _pct(pb.markov_away)},
-                            {"模型": "集成最終", "主": _pct(pb.final_home), "客": _pct(pb.final_away)},
-                        ]
-                    ),
-                    use_container_width=True,
-                    hide_index=True,
-                )
+
+        render_forecast_pipeline(fc)
 
         ic1, ic2 = st.columns(2)
         with ic1:
@@ -212,8 +199,10 @@ def page_current_future_predictions(sport: str, svc: PredictionService) -> None:
     st.caption(
         "以台灣時間顯示 · 今日儀表板含進行中、未開賽與已完賽 · "
         "中英文隊名並列 · 盤口：大小分、讓分、勝負賠率 · "
-        "預測納入每場開賽前已完賽結果、近況勝率、傷兵與陣容評估"
+        "預測納入歷史/畢氏/近況/馬可夫/H2H/傷兵/球員 box score → 貝氏集成 PK 勝率"
     )
+    with st.expander("貝氏集成 PK 模型方法論", expanded=False):
+        render_methodology_overview()
 
     max_days = config.SCHEDULE_SYNC_DAYS_AHEAD
     col_a, col_b, col_c = st.columns([1, 1, 2])
@@ -222,6 +211,7 @@ def page_current_future_predictions(sport: str, svc: PredictionService) -> None:
     with col_b:
         sync_btn = st.button("同步賽程並重算", type="secondary")
         recalc_btn = st.button("重新計算並儲存預測", type="primary")
+        full_recalc_btn = st.button("重算今日+歷史（貝氏）", type="secondary")
         if sport == "nba" and st.button("同步 Box Score", type="secondary"):
             with st.spinner("拉取 ESPN 逐場 box score（優先總冠軍賽）…"):
                 from sportsbet.data.boxscore_sync import sync_nba_box_scores
@@ -236,6 +226,14 @@ def page_current_future_predictions(sport: str, svc: PredictionService) -> None:
         with st.spinner("向 ESPN 補抓賽程…"):
             n = svc.ensure_schedule_sync(sport, days_ahead=max(days_ahead, max_days))
         st.caption(f"新增 {n} 場賽程")
+    if full_recalc_btn:
+        with st.spinner("重算今日/未來與全部歷史覆盤（貝氏集成管線）…"):
+            stats = svc.recompute_all_forecasts(sport, days_ahead=days_ahead)
+        st.success(
+            f"已更新：今日/未來 {stats.get('upcoming', 0)} 場 · "
+            f"歷史覆盤 {stats.get('history', 0)} 場"
+        )
+        st.rerun()
     if recalc_btn or sync_btn:
         with st.spinner("計算中…"):
             svc.run_upcoming(sport, days_ahead=days_ahead)
