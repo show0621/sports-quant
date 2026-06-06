@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import streamlit as st
 
 from sportsbet.data.team_names import team_bilingual
 
@@ -10,6 +11,54 @@ _MARKET_ZH = {
     "total": "大小分",
     "spread": "讓分",
 }
+
+
+def inject_bankroll_compact_style() -> None:
+    """縮小資金回測摘要數字，避免 metric 滿版。"""
+    st.markdown(
+        """
+        <style>
+        div.bankroll-metrics [data-testid="stMetric"] {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 0.35rem 0.5rem;
+        }
+        div.bankroll-metrics [data-testid="stMetricLabel"] {
+            font-size: 0.72rem !important;
+        }
+        div.bankroll-metrics [data-testid="stMetricValue"] {
+            font-size: 0.95rem !important;
+            font-weight: 600 !important;
+        }
+        div.bankroll-metrics [data-testid="stMetricDelta"] {
+            font-size: 0.68rem !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def format_compact_twd(value: float, *, signed: bool = False) -> str:
+    """緊湊台幣顯示（萬 / M）。"""
+    v = float(value)
+    prefix = "+" if signed and v > 0 else ("-" if signed and v < 0 else "")
+    av = abs(v)
+    if av >= 1_000_000:
+        return f"{prefix}NT$ {av / 1_000_000:.2f}M"
+    if av >= 10_000:
+        return f"{prefix}NT$ {av / 10_000:.1f}萬"
+    if av >= 1_000:
+        return f"{prefix}NT$ {av:,.0f}"
+    return f"{prefix}NT$ {av:.0f}"
+
+
+def format_compact_pct(value: float, *, signed: bool = False) -> str:
+    v = float(value) * 100
+    if signed:
+        return f"{v:+.1f}%"
+    return f"{v:.1f}%"
 
 
 def format_bet_selection(
@@ -103,15 +152,13 @@ def format_bankroll_trades(trades: pd.DataFrame, sport: str) -> pd.DataFrame:
     if "stake_frac" in out.columns:
         out["倉位比例"] = (out["stake_frac"].astype(float) * 100).round(2).astype(str) + "%"
     if "stake" in out.columns:
-        out["投注金額(台幣)"] = out["stake"].astype(float).round(0).map(lambda x: f"NT$ {x:,.0f}")
+        out["投注金額(台幣)"] = out["stake"].astype(float).map(lambda x: format_compact_twd(x))
     if "bankroll_before" in out.columns:
-        out["投注前資金"] = out["bankroll_before"].astype(float).round(0).map(lambda x: f"NT$ {x:,.0f}")
+        out["投注前資金"] = out["bankroll_before"].astype(float).map(lambda x: format_compact_twd(x))
     if "bankroll" in out.columns:
-        out["投注後資金"] = out["bankroll"].astype(float).round(0).map(lambda x: f"NT$ {x:,.0f}")
+        out["投注後資金"] = out["bankroll"].astype(float).map(lambda x: format_compact_twd(x))
     if "pnl" in out.columns:
-        out["損益(台幣)"] = out["pnl"].astype(float).round(0).map(
-            lambda x: f"NT$ {x:+,.0f}" if x != 0 else "NT$ 0"
-        )
+        out["損益(台幣)"] = out["pnl"].astype(float).map(lambda x: format_compact_twd(x, signed=True))
     if "won" in out.columns:
         out["結果"] = out["won"].map({1: "✓ 贏", 0: "✗ 輸"})
 

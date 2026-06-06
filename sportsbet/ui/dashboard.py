@@ -569,12 +569,19 @@ def page_model_health(sport: str) -> None:
 
 
 def page_bankroll(sport: str) -> None:
-    from sportsbet.ui.bankroll_display import format_bankroll_trades
+    from sportsbet.ui.bankroll_display import (
+        format_bankroll_trades,
+        format_compact_pct,
+        format_compact_twd,
+        inject_bankroll_compact_style,
+    )
 
+    inject_bankroll_compact_style()
     st.header("資金回測模擬 (Bankroll Simulation)")
     st.caption(
-        f"起始資金 NT$ {config.INITIAL_BANKROLL:,.0f} · 四分之一凱利 · "
-        f"僅下注 EV > {config.MIN_EV_THRESHOLD:.0%} · 依時間序逐筆模擬"
+        f"起始 NT$ {config.INITIAL_BANKROLL/10000:.0f}萬 · "
+        f"每場僅下注 EV 最高且 > 0 的單一玩法 · "
+        f"凱利 f*×{config.KELLY_FRACTION:g}（上限 {config.MAX_BET_FRACTION:.0%}）· 依日期序"
     )
 
     db = get_db()
@@ -606,29 +613,36 @@ def page_bankroll(sport: str) -> None:
             lambda r: risk.expected_value(float(r["model_prob"]), float(r["odds"])), axis=1
         )
 
-    evaluator = EvaluationModule()
+    evaluator = EvaluationModule(min_ev=0.0)
     report = evaluator.run_full_evaluation(df)
     summary = report.backtest_summary
 
+    st.markdown('<div class="bankroll-metrics">', unsafe_allow_html=True)
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("ROI", f"{summary.get('roi', 0):.2%}")
-    c2.metric("最終淨值", f"NT$ {summary.get('final_bankroll', config.INITIAL_BANKROLL):,.0f}")
-    c3.metric("最大回撤", f"{summary.get('max_drawdown', 0):.2%}")
-    c4.metric("下注筆數", summary.get("total_trades", 0))
-    c5.metric("總損益", f"NT$ {summary.get('total_pnl', 0):+,.0f}")
+    c1.metric("ROI", format_compact_pct(summary.get("roi", 0), signed=True))
+    c2.metric("最終淨值", format_compact_twd(summary.get("final_bankroll", config.INITIAL_BANKROLL)))
+    c3.metric("最大回撤", format_compact_pct(summary.get("max_drawdown", 0)))
+    c4.metric("下注場次", summary.get("total_trades", 0))
+    c5.metric("總損益", format_compact_twd(summary.get("total_pnl", 0), signed=True))
+    st.markdown("</div>", unsafe_allow_html=True)
 
     eq = report.equity_curve.reset_index(drop=True)
     eq_df = pd.DataFrame({"step": eq.index, "equity": eq.values})
     fig = px.line(eq_df, x="step", y="equity", title="淨值成長曲線 (Equity Curve)")
-    fig.add_hline(y=config.INITIAL_BANKROLL, line_dash="dot", annotation_text="起始資金")
-    fig.update_layout(yaxis_tickprefix="NT$ ", yaxis_tickformat=",.0f")
+    fig.add_hline(y=config.INITIAL_BANKROLL, line_dash="dot", annotation_text="起始")
+    fig.update_layout(
+        height=320,
+        margin=dict(l=40, r=20, t=40, b=40),
+        yaxis_tickformat=",.0f",
+        yaxis_title="台幣",
+    )
     st.plotly_chart(fig, use_container_width=True)
 
     if not report.trades.empty:
         st.subheader("交易明細")
         st.caption(
-            "每列為一筆實際下注：日期、對戰、盤口、投注項目、模型勝率、賠率、"
-            "凱利倉位、投注金額（台幣）、輸贏與損益。"
+            "每場一筆：該場 EV 最高且為正的唯一玩法 · 倉位依凱利公式 · "
+            "含日期、對戰、盤口、賠率、投注與損益。"
         )
         detail = format_bankroll_trades(report.trades, sport)
         st.dataframe(detail, use_container_width=True, hide_index=True)

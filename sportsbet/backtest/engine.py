@@ -20,6 +20,60 @@ from sportsbet.backtest.metrics import accuracy_report
 logger = logging.getLogger(__name__)
 
 
+def prepare_bet_signals(
+    df: pd.DataFrame,
+    *,
+    prob_col: str = "model_prob",
+    odds_col: str = "odds",
+    ev_col: str = "ev",
+    date_col: str = "match_date",
+    min_ev: float = 0.0,
+    kelly_fraction: float | None = None,
+    one_bet_per_game: bool = True,
+) -> pd.DataFrame:
+    """
+    篩選可下注列：EV > 0、Kelly 倉位 > 0，每場僅保留 EV 最高的一個玩法。
+    """
+    if df.empty:
+        return df
+
+    d = df.copy()
+    if ev_col not in d.columns:
+        d[ev_col] = d.apply(
+            lambda r: analytics.expected_value(float(r[prob_col]), float(r[odds_col])),
+            axis=1,
+        )
+
+    d[ev_col] = d[ev_col].astype(float)
+    d = d[d[ev_col] > max(0.0, min_ev)]
+
+    if "game_id" in d.columns and "market" in d.columns and "selection" in d.columns:
+        d = d.drop_duplicates(subset=["game_id", "market", "selection"], keep="first")
+
+    k_frac = kelly_fraction if kelly_fraction is not None else config.KELLY_FRACTION
+    d["_kelly_stake"] = d.apply(
+        lambda r: analytics.adjusted_kelly(float(r[prob_col]), float(r[odds_col]), k_frac),
+        axis=1,
+    )
+    d = d[d["_kelly_stake"] > 0]
+    if d.empty:
+        return d.iloc[0:0]
+
+    if one_bet_per_game:
+        if "game_id" in d.columns:
+            d = d.loc[d.groupby("game_id", sort=False)[ev_col].idxmax()]
+        else:
+            grp = ["match_date", "home_team", "away_team"]
+            grp = [c for c in grp if c in d.columns]
+            if grp:
+                d = d.loc[d.groupby(grp, sort=False)[ev_col].idxmax()]
+
+    sort_cols = [c for c in (date_col, "game_id") if c in d.columns]
+    if sort_cols:
+        d = d.sort_values(sort_cols)
+    return d.drop(columns=["_kelly_stake"], errors="ignore")
+
+
 @dataclass
 class BacktestResult:
     equity_curve: pd.Series
@@ -37,7 +91,7 @@ class BacktestEngine:
     ):
         self.bankroll0 = initial_bankroll or config.INITIAL_BANKROLL
         self.kelly_fraction = kelly_fraction or config.KELLY_FRACTION
-        self.min_ev = min_ev or config.MIN_EV_THRESHOLD
+        self.min_ev = min_ev if min_ev is not None else config.MIN_EV_THRESHOLD
 
     def run(
         self,
@@ -70,7 +124,18 @@ class BacktestEngine:
             )
             ev_col = "ev"
 
-        df = df.sort_values(date_col) if date_col in df.columns else df
+        singles = df[df.get(parlay_col, 1) == 1] if parlay_col in df.columns else df
+        singles = prepare_bet_signals(
+            singles,
+            prob_col=prob_col,
+            odds_col=odds_col,
+            ev_col=ev_col,
+            date_col=date_col,
+            min_ev=self.min_ev,
+            kelly_fraction=self.kelly_fraction,
+            one_bet_per_game=True,
+        )
+
         bankroll = self.bankroll0
         equity = [bankroll]
         trade_rows = []
@@ -82,20 +147,14 @@ class BacktestEngine:
                 "home_score", "away_score", "market", "selection",
                 "handicap", "model_prob", "ev", "stake_fraction",
             )
-            if c in df.columns
+            if c in singles.columns
         ]
-
-        # 單場：逐筆
-        singles = df[df.get(parlay_col, 1) == 1] if parlay_col in df.columns else df
 
         for idx, row in singles.iterrows():
             prob = float(row[prob_col])
             odds = float(row[odds_col])
             ev = float(row[ev_col])
             won = int(row.get(won_col, 0))
-
-            if ev <= self.min_ev:
-                continue
 
             stake_frac = analytics.adjusted_kelly(prob, odds, self.kelly_fraction)
             stake = bankroll * stake_frac
