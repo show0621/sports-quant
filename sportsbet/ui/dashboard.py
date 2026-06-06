@@ -48,7 +48,64 @@ def _pct(v: float | None) -> str:
 
 
 # 遞增以在 Streamlit Cloud 部署後清掉舊版 SportsDatabase 快取
-_DB_CACHE_VERSION = 3
+_DB_CACHE_VERSION = 4
+
+
+def _schedule_coverage(db: SportsDatabase, sport: str) -> dict[str, object]:
+    """賽程涵蓋範圍；相容舊版快取中的 SportsDatabase 實例。"""
+    if hasattr(db, "get_schedule_coverage"):
+        return db.get_schedule_coverage(sport)  # type: ignore[attr-defined]
+    today = date.today().isoformat()
+    empty: dict[str, object] = {
+        "first_date": "",
+        "last_date": "",
+        "total_games": 0,
+        "today_games": 0,
+        "future_games": 0,
+        "covers_today": False,
+    }
+    try:
+        with db.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT MAX(match_date) AS last_date,
+                       MIN(match_date) AS first_date,
+                       COUNT(*) AS total_games,
+                       SUM(CASE WHEN match_date = ? THEN 1 ELSE 0 END) AS today_games,
+                       SUM(CASE WHEN match_date >= ? THEN 1 ELSE 0 END) AS future_games
+                FROM games WHERE sport = ?
+                """,
+                (today, today, sport),
+            ).fetchone()
+    except Exception:
+        return empty
+    if not row:
+        return empty
+    last = str(row["last_date"] or "")[:10]
+    first = str(row["first_date"] or "")[:10]
+    return {
+        "first_date": first,
+        "last_date": last,
+        "total_games": int(row["total_games"] or 0),
+        "today_games": int(row["today_games"] or 0),
+        "future_games": int(row["future_games"] or 0),
+        "covers_today": last >= today if last else False,
+    }
+
+
+def _sync_meta(db: SportsDatabase, sport: str, meta_key: str) -> str | None:
+    """讀取 backtest_sync_meta；相容舊版 DB 包裝。"""
+    if hasattr(db, "get_backtest_sync_meta"):
+        return db.get_backtest_sync_meta(sport, meta_key)  # type: ignore[attr-defined]
+    try:
+        with db.connection() as conn:
+            row = conn.execute(
+                "SELECT meta_value FROM backtest_sync_meta WHERE sport = ? AND meta_key = ?",
+                (sport, meta_key),
+            ).fetchone()
+        return str(row["meta_value"]) if row and row["meta_value"] is not None else None
+    except Exception:
+        return None
 
 
 @st.cache_resource
@@ -81,10 +138,10 @@ def _show_db_push_result(result: DbPushResult) -> None:
 
 
 def _render_db_coverage(db: SportsDatabase, sport: str) -> None:
-    cov = db.get_schedule_coverage(sport)  # type: ignore[arg-type]
+    cov = _schedule_coverage(db, sport)
     last = str(cov.get("last_date") or "—")
     today_ok = "含今日" if cov.get("covers_today") else "尚無今日"
-    pushed = db.get_backtest_sync_meta(sport, "db_pushed_at")  # type: ignore[arg-type]
+    pushed = _sync_meta(db, sport, "db_pushed_at")
     push_note = f" · GitHub {str(pushed)[:16]}" if pushed else ""
     st.sidebar.caption(
         f"📦 DB 賽程 {cov.get('first_date', '—')} → {last} · {today_ok} · "
@@ -96,7 +153,7 @@ def _render_db_coverage(db: SportsDatabase, sport: str) -> None:
 def ensure_data(sport: str) -> None:
     """看板載入：優先讀 repo DB；僅在資料空或缺今日賽程時提示同步。"""
     db = get_db()
-    cov = db.get_schedule_coverage(sport)  # type: ignore[arg-type]
+    cov = _schedule_coverage(db, sport)
     if cov.get("covers_today") or cov.get("total_games", 0) > 0:
         return
     if db.get_team_stats(sport).empty and db.get_games(sport, date.today().isoformat()).empty:
@@ -600,7 +657,7 @@ def main() -> None:
 
     _render_db_coverage(get_db(), sport)
 
-    last_live = get_db().get_backtest_sync_meta(sport, "live_synced_at")
+    last_live = _sync_meta(get_db(), sport, "live_synced_at")
     if last_live:
         st.sidebar.caption(f"🟢 Live · {last_live[:16]}")
     else:
