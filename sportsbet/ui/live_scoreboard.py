@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import pandas as pd
 import streamlit as st
 
 from sportsbet.data.database import SportsDatabase
+from sportsbet.models.forecast import GameForecast, forecast_pick_dict, team_rating_panel_html
 from sportsbet.data.team_logos import resolve_logo_url
 from sportsbet.ui.matchup_display import (
     format_match_datetime,
@@ -108,13 +109,8 @@ def _load_forecast(
     sport: str,
     g: pd.Series,
     svc: PredictionService | None,
-) -> dict[str, Any] | None:
+) -> GameForecast | None:
     gid = int(g["id"])
-    match_date = str(g.get("match_date", ""))[:10]
-    row = _get_game_forecast_row(db, sport, gid, match_date)
-    if row is not None and pd.notna(row.get("predicted_winner")):
-        return row.to_dict()
-
     if svc is None:
         return None
     stats = svc.db.get_team_stats(sport).set_index("team")
@@ -122,31 +118,14 @@ def _load_forecast(
     if ht not in stats.index or at not in stats.index:
         return None
     line = _get_total_line(db, gid)
-    fc = svc.forecast_game_row(sport, g, stats, total_line=line)
-    if not fc:
-        return None
-    return {
-        "predicted_winner": fc.predicted_winner,
-        "home_win_prob": fc.home_win_prob,
-        "away_win_prob": fc.away_win_prob,
-        "predicted_margin": fc.predicted_margin,
-        "predicted_total": fc.predicted_total,
-        "total_line": fc.total_line,
-        "prob_over": fc.prob_over,
-        "prob_under": fc.prob_under,
-        "predicted_home_score": fc.predicted_home_score,
-        "predicted_away_score": fc.predicted_away_score,
-        "pick_correct": fc.pick_correct,
-        "home_team": fc.home_team,
-        "away_team": fc.away_team,
-    }
+    return svc.forecast_game_row(sport, g, stats, total_line=line)
 
 
 def _render_prediction_strip(
     db: SportsDatabase,
     sport: str,
     g: pd.Series,
-    fc: dict[str, Any] | None,
+    fc: GameForecast | None,
     *,
     status: str,
 ) -> None:
@@ -158,6 +137,7 @@ def _render_prediction_strip(
         )
         return
 
+    fc_dict = forecast_pick_dict(fc)
     home = str(g["home_team"])
     away = str(g["away_team"])
     is_final = status == "final"
@@ -166,7 +146,7 @@ def _render_prediction_strip(
 
     odds = summarize_game_odds(db, int(g["id"]))
     picks = build_game_market_picks(
-        fc,
+        fc_dict,
         odds,
         sport,
         home_team=home,
@@ -176,12 +156,12 @@ def _render_prediction_strip(
         is_final=is_final,
     )
 
-    ph, pa = fc.get("predicted_home_score"), fc.get("predicted_away_score")
+    ph, pa = fc.predicted_home_score, fc.predicted_away_score
     score_sub = ""
     if ph is not None and pa is not None and not pd.isna(ph) and not pd.isna(pa):
         score_sub = f"預估比分 {int(pa)}–{int(ph)}"
 
-    margin = fc.get("predicted_margin")
+    margin = fc.predicted_margin
     margin_hint = ""
     if margin is not None and not pd.isna(margin):
         margin_hint = f"模型淨勝 {float(margin):+.1f}"
@@ -222,7 +202,7 @@ def _render_prediction_strip(
                 <div class="sq-pred-cell">
                     <div class="sq-pred-label">勝負預測</div>
                     {ml_body}
-                    <div class="sq-pred-sub">主 {_pct(fc.get('home_win_prob'))} · 客 {_pct(fc.get('away_win_prob'))}</div>
+                    <div class="sq-pred-sub">主 {_pct(fc.home_win_prob)} · 客 {_pct(fc.away_win_prob)}</div>
                 </div>
                 <div class="sq-pred-cell">
                     <div class="sq-pred-label">勝分差（讓分）</div>
@@ -235,6 +215,7 @@ def _render_prediction_strip(
             </div>
             {summary_tags}
         </div>
+        {team_rating_panel_html(fc, sport)}
         """,
         unsafe_allow_html=True,
     )

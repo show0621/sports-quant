@@ -224,6 +224,52 @@ def inject_dashboard_theme() -> None:
             border-top: 1px dashed var(--sq-border-light);
         }
 
+        /* 球隊評分明細 */
+        .sq-rating-panel {
+            margin-top: 0.65rem;
+            padding-top: 0.65rem;
+            border-top: 1px dashed var(--sq-border-light);
+        }
+        .sq-rating-title {
+            font-size: 0.78rem;
+            font-weight: 600;
+            color: var(--sq-muted);
+            letter-spacing: 0.06em;
+            margin-bottom: 0.45rem;
+        }
+        .sq-rating-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.82rem;
+        }
+        .sq-rating-table th {
+            text-align: center;
+            padding: 0.35rem 0.5rem;
+            font-weight: 600;
+            color: var(--sq-text);
+            border-bottom: 1px solid var(--sq-border);
+        }
+        .sq-rating-table th:first-child { text-align: left; width: 28%; }
+        .sq-rating-zh { font-size: 0.72rem; color: var(--sq-muted); font-weight: 400; }
+        .sq-rating-metric {
+            padding: 0.3rem 0.5rem;
+            color: var(--sq-muted);
+            font-weight: 500;
+        }
+        .sq-rating-val {
+            text-align: center;
+            padding: 0.3rem 0.5rem;
+            font-variant-numeric: tabular-nums;
+        }
+        .sq-rating-val.away { background: #f8fafc; }
+        .sq-rating-val.home { background: #f1f5f9; }
+        .sq-rating-table tbody tr:nth-child(even) .sq-rating-val.away { background: #f1f5f9; }
+        .sq-rating-table tbody tr:nth-child(even) .sq-rating-val.home { background: #e2e8f0; }
+        .sq-rating-table tbody tr:last-child .sq-rating-val {
+            font-weight: 700;
+            color: var(--sq-primary);
+        }
+
         /* 盤口面板 */
         .sq-odds-panel {
             background: #f8fafc;

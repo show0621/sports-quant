@@ -10,7 +10,12 @@ from sportsbet.data.database import SportsDatabase
 from sportsbet.data.point_in_time_stats import PointInTimeStatsBuilder
 from sportsbet.data.team_logos import espn_logo_url
 from sportsbet.models.analytics_engine import AnalyticsEngine
-from sportsbet.models.forecast import GameForecast, build_game_forecast, forecasts_to_matchup_table
+from sportsbet.models.forecast import (
+    GameForecast,
+    build_game_forecast,
+    forecast_event_label,
+    forecasts_to_matchup_table,
+)
 
 Sport = Literal["nba", "mlb"]
 

@@ -392,6 +392,85 @@ def forecasts_to_matchup_table(forecasts: list[GameForecast]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def format_wl_record(games: int, win_pct: float) -> str:
+    """由出賽數與勝率推算 W-L 戰績。"""
+    if games <= 0:
+        return "—"
+    wins = round(float(win_pct) * games)
+    wins = max(0, min(games, wins))
+    return f"{wins}-{games - wins}"
+
+
+def forecast_pick_dict(fc: GameForecast) -> dict[str, Any]:
+    """供盤口/EV 計算使用的扁平 dict。"""
+    return {
+        "predicted_winner": fc.predicted_winner,
+        "home_win_prob": fc.home_win_prob,
+        "away_win_prob": fc.away_win_prob,
+        "predicted_margin": fc.predicted_margin,
+        "predicted_total": fc.predicted_total,
+        "total_line": fc.total_line,
+        "prob_over": fc.prob_over,
+        "prob_under": fc.prob_under,
+        "predicted_home_score": fc.predicted_home_score,
+        "predicted_away_score": fc.predicted_away_score,
+        "pick_correct": fc.pick_correct,
+        "home_team": fc.home_team,
+        "away_team": fc.away_team,
+    }
+
+
+def _fmt_pct(v: float | None, *, signed: bool = False) -> str:
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return "—"
+    x = float(v)
+    if signed:
+        return f"{x * 100:+.1f}%"
+    return f"{x * 100:.1f}%"
+
+
+def team_rating_panel_html(fc: GameForecast, sport: str) -> str:
+    """即時看板：兩隊評分對照表 HTML。"""
+    from sportsbet.data.team_names import team_bilingual
+
+    away = fc.away
+    home = fc.home
+    a_en, a_zh = team_bilingual(away.team, sport)
+    h_en, h_zh = team_bilingual(home.team, sport)
+    a_head = f"{a_en}<br><span class='sq-rating-zh'>{a_zh}</span>" if a_zh else a_en
+    h_head = f"{h_en}<br><span class='sq-rating-zh'>{h_zh}</span>" if h_zh else h_en
+
+    away_base = fc.away_win_prob_base
+    home_base = fc.home_win_prob_base
+    away_adj = fc.away_injury_adj
+    home_adj = fc.home_injury_adj
+
+    rows = [
+        ("戰績 W-L", format_wl_record(away.games, away.season_win_pct),
+         format_wl_record(home.games, home.season_win_pct)),
+        ("賽季勝率", _fmt_pct(away.season_win_pct), _fmt_pct(home.season_win_pct)),
+        ("畢氏勝率", _fmt_pct(away.pythagorean_win_pct), _fmt_pct(home.pythagorean_win_pct)),
+        ("貝氏勝率", _fmt_pct(away.bayesian_win_pct), _fmt_pct(home.bayesian_win_pct)),
+        ("傷兵前勝率", _fmt_pct(away_base), _fmt_pct(home_base)),
+        ("傷兵修正", _fmt_pct(away_adj, signed=True), _fmt_pct(home_adj, signed=True)),
+        ("模型預測勝率", _fmt_pct(fc.away_win_prob), _fmt_pct(fc.home_win_prob)),
+    ]
+
+    body = "".join(
+        f"<tr><td class='sq-rating-metric'>{label}</td>"
+        f"<td class='sq-rating-val away'>{av}</td>"
+        f"<td class='sq-rating-val home'>{hv}</td></tr>"
+        for label, av, hv in rows
+    )
+    return (
+        f"<div class='sq-rating-panel'>"
+        f"<div class='sq-rating-title'>球隊評分明細</div>"
+        f"<table class='sq-rating-table'>"
+        f"<thead><tr><th></th><th>客 · {a_head}</th><th>主 · {h_head}</th></tr></thead>"
+        f"<tbody>{body}</tbody></table></div>"
+    )
+
+
 def team_detail_dataframe(f: GameForecast) -> pd.DataFrame:
     """單場兩隊明細表。"""
     rows = []
@@ -400,6 +479,7 @@ def team_detail_dataframe(f: GameForecast) -> pd.DataFrame:
             {
                 "主客": label,
                 "隊伍": side.team,
+                "戰績 W-L": format_wl_record(side.games, side.season_win_pct),
                 "场均得分": round(side.rs_per_game, 2),
                 "场均失分": round(side.ra_per_game, 2),
                 "畢達哥拉斯勝率": side.pythagorean_win_pct,
