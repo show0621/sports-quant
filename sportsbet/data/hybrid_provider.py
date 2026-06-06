@@ -90,7 +90,7 @@ class HybridIngestionProvider(SportLotteryOddsMixin, DataIngestionProvider):
     優先順序：
     - 賽程：API-Sports（若金鑰可用且賽季未受限）→ NBA: nba_api 當季 / ESPN 每日
     - 歷史：NBA nba_api → API-Sports → ESPN 回補
-    - 賠率：運彩 Blob
+    - 賠率：台灣運彩 Blob（官網 event 同源）→ 玩運彩補缺
     - 傷兵：ESPN（由 player_ingestion 處理）
     """
 
@@ -175,7 +175,7 @@ def data_source_description(sport: SportLit) -> str:
         parts.append("NBA=nba_api+ESPN")
     else:
         parts.append("MLB=ESPN")
-    parts.append("賠率=運彩Blob")
+    parts.append("賠率=台灣運彩Blob→玩運彩補缺")
     parts.append("傷兵=ESPN")
     if config.API_SPORTS_USE_FOR_SCHEDULE and config.resolve_api_sports_key():
         parts.append("API-Sports=賽程")

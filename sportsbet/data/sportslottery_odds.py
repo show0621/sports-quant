@@ -6,6 +6,7 @@ import logging
 import pandas as pd
 
 from sportsbet.data.database import SportsDatabase
+from sportsbet.data.tw_odds_sync import sync_tw_odds_for_date
 
 logger = logging.getLogger(__name__)
 
@@ -27,64 +28,23 @@ class SportLotteryOddsMixin:
         from datetime import date
 
         d = match_date or date.today().isoformat()
-        rows = self._fetch_sportslottery_odds(sport, d, replace=replace)
-        if rows.empty:
-            logger.warning("運彩 Blob 無 %s 賠率（%s）", sport, d)
-        return rows
-
-    def _fetch_sportslottery_odds(
-        self,
-        sport: SportLit,
-        match_date: str,
-        *,
-        replace: bool = False,
-    ) -> pd.DataFrame:
-        from sportsbet.data.sportslottery import SportLotteryClient
-        from sportsbet.data.team_logos import resolve_team_in_database
-
-        try:
-            client = SportLotteryClient()
-            odds_df = client.fetch_all(sports={sport})
-        except Exception as exc:
-            logger.warning("運彩 Blob 抓取失敗: %s", exc)
-            return pd.DataFrame()
-
-        if odds_df.empty:
-            return odds_df
-
-        odds_df = odds_df.copy()
-        odds_df["home_team"] = odds_df["home_team"].map(
-            lambda t: resolve_team_in_database(self.db, sport, str(t))  # type: ignore[arg-type]
+        stats = sync_tw_odds_for_date(self.db, sport, d, replace=replace)
+        logger.info(
+            "台灣盤口 %s %s → 運彩 %d 列 · 玩運彩補 %d",
+            sport, d, stats.get("sportslottery_rows", 0), stats.get("playsport_fallback", 0),
         )
-        odds_df["away_team"] = odds_df["away_team"].map(
-            lambda t: resolve_team_in_database(self.db, sport, str(t))  # type: ignore[arg-type]
-        )
-        if "match_date" in odds_df.columns:
-            odds_df = odds_df[odds_df["match_date"].astype(str).str[:10] == match_date]
-
-        games = self.db.get_games(sport, match_date)
+        games = self.db.get_games(sport, d)
         if games.empty:
             return pd.DataFrame()
-
-        if replace:
-            self.db.clear_odds_for_date(sport, match_date)  # type: ignore[arg-type]
-
-        inserted = []
-        for _, o in odds_df.iterrows():
-            match = games[
-                (games["home_team"] == o["home_team"]) & (games["away_team"] == o["away_team"])
-            ]
-            if match.empty:
-                continue
-            gid = int(match.iloc[0]["id"])
-            self.db.insert_odds(
-                gid,
-                str(o.get("market", "moneyline")),
-                str(o.get("selection", "home")),
-                float(o["odds"]),
-                handicap=float(o["handicap"]) if pd.notna(o.get("handicap")) else None,
-                bookmaker="sportslottery",
+        with self.db.connection() as conn:
+            return pd.read_sql_query(
+                """
+                SELECT o.*, g.home_team, g.away_team, g.match_date
+                FROM odds o
+                JOIN games g ON g.id = o.game_id
+                WHERE g.sport = ? AND g.match_date = ?
+                ORDER BY o.id
+                """,
+                conn,
+                params=(sport, d),
             )
-            inserted.append({**o.to_dict(), "game_id": gid})
-
-        return pd.DataFrame(inserted)

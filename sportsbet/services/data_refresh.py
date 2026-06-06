@@ -45,6 +45,13 @@ def prepare_backtest_odds(
     )
 
     out["jbot_odds"] = sync_jbot_odds_to_db(db, sport, incremental=incremental)
+
+    from sportsbet.data.tw_odds_sync import sync_tw_odds_recent
+
+    tw = sync_tw_odds_recent(db, sport)
+    out["tw_odds_sportslottery"] = tw.get("sportslottery_rows", 0)
+    out["tw_odds_playsport"] = tw.get("playsport_fallback", 0)
+
     if out["jbot_odds"] > 0:
         out["moneyline_predictions"] = rebuild_moneyline_predictions(db, sport)
     elif config.PLAYSPORT_MONEYLINE_ENABLED:
@@ -54,6 +61,8 @@ def prepare_backtest_odds(
         out["market_predictions"] = rebuild_predictions_from_forecasts(db, sport)
     else:
         out["moneyline_backfill"] = backfill_tw_moneyline_odds(db, sport)
+    if "market_predictions" not in out and out.get("tw_odds_sportslottery", 0) > 0:
+        out["market_predictions"] = rebuild_predictions_from_forecasts(db, sport)
     return out
 
 

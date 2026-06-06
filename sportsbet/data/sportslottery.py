@@ -30,11 +30,12 @@ SI_TO_SPORT: dict[int, str] = {
     SI_MLB: "mlb",
 }
 
-# ms.id → 標準 market 名稱（籃球 / 棒球通用簡化）
+# ms.id → 標準 market（與官網玩法對應，見 HackMD 運彩爬蟲）
 MARKET_ID_MAP: dict[int, str] = {
-    1: "moneyline",
-    3: "spread",
-    5: "total",
+    1: "moneyline",   # 不讓分
+    3: "spread",      # 讓分
+    5: "total",       # 大小分
+    7: "margin",      # 勝分差
 }
 
 # 選項位置 p → selection
@@ -87,11 +88,17 @@ def _parse_kdt(kdt: Any) -> tuple[str, str]:
 def _guess_selection(market: str, position: int, n_selections: int) -> str:
     if market == "total":
         if position in (4, 5):
-            return POSITION_MAP.get(position, "over" if position % 2 == 0 else "under")
-        # 籃球總分常見 p=1 over, p=3 under
+            return POSITION_MAP.get(position, "over" if position == 4 else "under")
         return "over" if position == 1 else "under"
+    if market == "margin":
+        return POSITION_MAP.get(position, f"band_{position}")
     if market == "moneyline" and n_selections == 2:
         return "home" if position == 1 else "away"
+    if market == "spread":
+        if position == 1:
+            return "home"
+        if position == 3:
+            return "away"
     return POSITION_MAP.get(position, f"p{position}")
 
 
