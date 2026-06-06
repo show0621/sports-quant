@@ -14,6 +14,30 @@ from sportsbet.ui.model_methodology import render_forecast_pipeline, render_meth
 from sportsbet.ui.odds_display import render_odds_panel
 
 
+def _load_upcoming_forecasts(svc: PredictionService, sport: str, days_ahead: int) -> list[GameForecast]:
+    loader = getattr(svc, "load_stored_upcoming", None)
+    if callable(loader):
+        try:
+            stored = loader(sport, days_ahead=days_ahead)
+            if stored:
+                return stored
+        except Exception:
+            pass
+    return [
+        f for f in svc.run_upcoming(sport, days_ahead=days_ahead)
+        if isinstance(f, GameForecast)
+    ]
+
+
+def _recompute_all_forecasts(svc: PredictionService, sport: str, days_ahead: int) -> dict[str, int]:
+    fn = getattr(svc, "recompute_all_forecasts", None)
+    if callable(fn):
+        return fn(sport, days_ahead=days_ahead)
+    upcoming = svc.run_upcoming(sport, days_ahead=days_ahead)
+    review = svc.run_backtest_reconcile(sport, only_missing=False)
+    return {"upcoming": len(upcoming), "history": len(review)}
+
+
 def _render_injury_impact(fc, side: str) -> None:
     missing = getattr(fc, f"{side}_missing", None) or []
     penalty = getattr(fc, f"{side}_injury_penalty", None)
@@ -228,7 +252,7 @@ def page_current_future_predictions(sport: str, svc: PredictionService) -> None:
         st.caption(f"新增 {n} 場賽程")
     if full_recalc_btn:
         with st.spinner("重算今日/未來與全部歷史覆盤（貝氏集成管線）…"):
-            stats = svc.recompute_all_forecasts(sport, days_ahead=days_ahead)
+            stats = _recompute_all_forecasts(svc, sport, days_ahead)
         st.success(
             f"已更新：今日/未來 {stats.get('upcoming', 0)} 場 · "
             f"歷史覆盤 {stats.get('history', 0)} 場"
@@ -240,7 +264,7 @@ def page_current_future_predictions(sport: str, svc: PredictionService) -> None:
         st.success("已更新預測紀錄")
         st.rerun()
 
-    forecasts = svc.load_stored_upcoming(sport, days_ahead=days_ahead)
+    forecasts = _load_upcoming_forecasts(svc, sport, days_ahead)
     today = date.today().isoformat()
 
     if not forecasts:

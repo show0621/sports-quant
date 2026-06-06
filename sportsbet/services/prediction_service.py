@@ -185,7 +185,7 @@ class PredictionService:
             existing = self.db.get_games(sport, d)
             if not existing.empty:
                 continue
-            if self.db.is_schedule_date_checked(sport, d):
+            if getattr(self.db, "is_schedule_date_checked", None) and self.db.is_schedule_date_checked(sport, d):
                 continue
             df = client.sync_date_to_database(self.db, sport, d)
             synced += len(df)
@@ -288,6 +288,17 @@ class PredictionService:
             forecasts.append(fc)
         return forecasts
 
+    def _forecast_rows_for_ids(self, game_ids: list[int]) -> dict[int, pd.Series]:
+        batch = getattr(self.db, "get_game_forecasts_for_ids", None)
+        if callable(batch):
+            return batch(game_ids)
+        out: dict[int, pd.Series] = {}
+        for gid in game_ids:
+            row = self.db.get_game_forecast_row(gid)
+            if row is not None:
+                out[gid] = row
+        return out
+
     def load_stored_for_date(
         self,
         sport: Sport,
@@ -300,7 +311,7 @@ class PredictionService:
         games = self.db.get_games(sport, d)
         if games.empty:
             return []
-        fc_rows = self.db.get_game_forecasts_for_ids([int(g) for g in games["id"].tolist()])
+        fc_rows = self._forecast_rows_for_ids([int(g) for g in games["id"].tolist()])
         out: list[GameForecast] = []
         for _, g in games.drop_duplicates(subset=["id"]).iterrows():
             row = fc_rows.get(int(g["id"]))
@@ -322,7 +333,7 @@ class PredictionService:
             return []
 
         game_ids = [int(g) for g in games["id"].tolist()]
-        fc_rows = self.db.get_game_forecasts_for_ids(game_ids)
+        fc_rows = self._forecast_rows_for_ids(game_ids)
         today_str = date.today().isoformat()
         _FINISHED_LOCAL = ("final", "FT", "AOT", "Finished", "POST")
         forecasts: list[GameForecast] = []

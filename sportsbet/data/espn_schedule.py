@@ -21,6 +21,57 @@ logger = logging.getLogger(__name__)
 Sport = Literal["nba", "mlb"]
 _TZ = ZoneInfo("Asia/Taipei")
 
+
+def upsert_espn_game(db: SportsDatabase, sport: Sport, g: dict) -> int:
+    """寫入 ESPN 賽程列；相容舊版 upsert_game（無 espn_event_id 參數）。"""
+    import inspect
+
+    sig = inspect.signature(db.upsert_game)
+    opts: dict = {
+        "match_datetime": g.get("match_datetime"),
+        "home_score": g.get("home_score"),
+        "away_score": g.get("away_score"),
+        "status": g.get("status", "scheduled"),
+        "home_logo_url": g.get("home_logo_url"),
+        "away_logo_url": g.get("away_logo_url"),
+        "season_type": g.get("season_type"),
+        "competition_note": g.get("competition_note"),
+        "period": g.get("period"),
+        "clock": g.get("clock"),
+        "status_detail": g.get("status_detail"),
+    }
+    eid = g.get("espn_event_id")
+    if eid and "espn_event_id" in sig.parameters:
+        opts["espn_event_id"] = eid
+    gid = db.upsert_game(
+        sport,
+        g["match_date"],
+        g["home_team"],
+        g["away_team"],
+        **opts,
+    )
+    if eid and "espn_event_id" not in sig.parameters:
+        setter = getattr(db, "set_game_espn_event_id", None)
+        if callable(setter):
+            try:
+                setter(gid, str(eid))
+            except Exception:
+                logger.debug("skip espn_event_id game_id=%s", gid, exc_info=True)
+    return gid
+
+
+def _mark_schedule_checked(db: SportsDatabase, sport: Sport, match_date: str) -> None:
+    marker = getattr(db, "mark_schedule_date_checked", None)
+    if callable(marker):
+        marker(sport, match_date)
+
+
+def _is_schedule_checked(db: SportsDatabase, sport: Sport, match_date: str) -> bool:
+    checker = getattr(db, "is_schedule_date_checked", None)
+    if not callable(checker):
+        return False
+    return bool(checker(sport, match_date))
+
 _ESPN_FINAL = frozenset(
     {"status_final", "final", "status_full_time", "full_time", "completed"}
 )
@@ -176,29 +227,12 @@ class EspnScheduleClient:
         out = []
         for g in games:
             try:
-                gid = db.upsert_game(
-                    sport,
-                    g["match_date"],
-                    g["home_team"],
-                    g["away_team"],
-                    match_datetime=g.get("match_datetime"),
-                    home_score=g.get("home_score"),
-                    away_score=g.get("away_score"),
-                    status=g.get("status", "scheduled"),
-                    home_logo_url=g.get("home_logo_url"),
-                    away_logo_url=g.get("away_logo_url"),
-                    season_type=g.get("season_type"),
-                    competition_note=g.get("competition_note"),
-                    period=g.get("period"),
-                    clock=g.get("clock"),
-                    status_detail=g.get("status_detail"),
-                    espn_event_id=g.get("espn_event_id"),
-                )
+                gid = upsert_espn_game(db, sport, g)
             except ValueError as exc:
                 logger.debug("skip game %s vs %s: %s", g.get("away_team"), g.get("home_team"), exc)
                 continue
             out.append({**g, "game_id": gid})
-        db.mark_schedule_date_checked(sport, match_date)
+        _mark_schedule_checked(db, sport, match_date)
         return pd.DataFrame(out)
 
     def sync_window_to_database(
@@ -234,12 +268,12 @@ class EspnScheduleClient:
         n = 0
         for offset in range(days_back):
             d = (date.today() - timedelta(days=offset)).isoformat()
-            if only_missing and db.is_schedule_date_checked(sport, d):
+            if only_missing and _is_schedule_checked(db, sport, d):
                 games = db.get_games(sport, d)
                 if not games.empty and games["home_score"].notna().all():
                     continue
             df = self.sync_date_to_database(db, sport, d)
-            db.mark_schedule_date_checked(sport, d)
+            _mark_schedule_checked(db, sport, d)
             n += len(df)
             time.sleep(pause_sec)
         return n
