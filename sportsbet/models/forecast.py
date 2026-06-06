@@ -165,6 +165,7 @@ def build_game_forecast(
     actual_home_score: int | None = None,
     actual_away_score: int | None = None,
     db: Any | None = None,
+    use_roster: bool = True,
 ) -> GameForecast:
     """產生單場完整預測（含各隊畢達哥拉斯、賽季勝率、貝氏後驗）。"""
     home_pyth = engine.team_win_pct(home_rs, home_ra, home_games)
@@ -176,21 +177,48 @@ def build_game_forecast(
 
     log5_home, log5_away = analytics.matchup_win_prob(home_pyth, away_pyth, engine.home_advantage)
 
-    bayes_home = engine.bayesian_posterior(
-        log5_home,
-        is_home=True,
-        recent_win_pct=h_recent,
-        season_win_pct=home_pyth,
-    )
-    bayes_away = engine.bayesian_posterior(
-        log5_away,
-        recent_win_pct=a_recent,
-        season_win_pct=away_pyth,
-    )
+    prob_breakdown = None
+    if config.USE_MARKOV_FORM or config.USE_CONTEXT_FEATURES:
+        from sportsbet.models.probability_engine import ensemble_matchup_probability
 
-    total = bayes_home + bayes_away
-    home_prob_base = bayes_home / total
-    away_prob_base = bayes_away / total
+        prob_breakdown = ensemble_matchup_probability(
+            engine,
+            sport,
+            home_team,
+            away_team,
+            home_rs,
+            home_ra,
+            away_rs,
+            away_ra,
+            match_date,
+            home_games=home_games,
+            away_games=away_games,
+            home_season_win_pct=home_season_win_pct,
+            away_season_win_pct=away_season_win_pct,
+            home_recent_win_pct=home_recent_win_pct,
+            away_recent_win_pct=away_recent_win_pct,
+            db=db,
+        )
+        bayes_home = prob_breakdown.bayesian_home
+        bayes_away = prob_breakdown.bayesian_away
+        home_prob_base = prob_breakdown.final_home
+        away_prob_base = prob_breakdown.final_away
+    else:
+        bayes_home = engine.bayesian_posterior(
+            log5_home,
+            is_home=True,
+            recent_win_pct=h_recent,
+            season_win_pct=home_pyth,
+        )
+        bayes_away = engine.bayesian_posterior(
+            log5_away,
+            recent_win_pct=a_recent,
+            season_win_pct=away_pyth,
+        )
+        total = bayes_home + bayes_away
+        home_prob_base = bayes_home / total
+        away_prob_base = bayes_away / total
+
     home_prob = home_prob_base
     away_prob = away_prob_base
 
@@ -198,26 +226,29 @@ def build_game_forecast(
     home_miss: list[dict[str, Any]] = []
     away_miss: list[dict[str, Any]] = []
 
-    if config.USE_ROSTER_RATING and db is not None:
-        from sportsbet.models.roster_engine import DynamicRosterRatingEngine
+    if db is not None and use_roster:
+        from sportsbet.data.data_quality import roster_rating_enabled
 
-        rr = DynamicRosterRatingEngine(db).matchup_with_roster(
-            sport, home_team, away_team, match_date, home_prob, away_prob,
-        )
-        home_prob = rr["home_win_prob"]
-        away_prob = rr["away_win_prob"]
-        home_adj = rr["home"].adjusted_rating
-        away_adj = rr["away"].adjusted_rating
-        home_pen = rr["home"].injury_penalty
-        away_pen = rr["away"].injury_penalty
-        home_miss = [
-            {"name": m.name, "status": m.status, "penalty": m.win_prob_penalty}
-            for m in rr["home"].excluded_players + rr["home"].discounted_players
-        ]
-        away_miss = [
-            {"name": m.name, "status": m.status, "penalty": m.win_prob_penalty}
-            for m in rr["away"].excluded_players + rr["away"].discounted_players
-        ]
+        if roster_rating_enabled(db, sport):
+            from sportsbet.models.roster_engine import DynamicRosterRatingEngine
+
+            rr = DynamicRosterRatingEngine(db).matchup_with_roster(
+                sport, home_team, away_team, match_date, home_prob, away_prob,
+            )
+            home_prob = rr["home_win_prob"]
+            away_prob = rr["away_win_prob"]
+            home_adj = rr["home"].adjusted_rating
+            away_adj = rr["away"].adjusted_rating
+            home_pen = rr["home"].injury_penalty
+            away_pen = rr["away"].injury_penalty
+            home_miss = [
+                {"name": m.name, "status": m.status, "penalty": m.win_prob_penalty}
+                for m in rr["home"].excluded_players + rr["home"].discounted_players
+            ]
+            away_miss = [
+                {"name": m.name, "status": m.status, "penalty": m.win_prob_penalty}
+                for m in rr["away"].excluded_players + rr["away"].discounted_players
+            ]
 
     lam_h, lam_a = engine.expected_score_lambdas(home_rs, home_ra, away_rs, away_ra)
     pred_home = round(lam_h, 1)

@@ -53,13 +53,62 @@ def cmd_scan(args: argparse.Namespace) -> None:
     from sportsbet.monitor.scanner import DailyScanner
 
     scanner = DailyScanner(args.sport)
-    signals = scanner.positive_ev_only(
-        wanda_path=args.path,
-        use_live_scrape=not args.offline,
-    )
+    signals = scanner.positive_ev_only()
     if args.notify and not signals.empty:
         AlertNotifier().notify_signals(signals)
     print(signals.to_string(index=False) if not signals.empty else "無正 EV 訊號")
+
+
+def cmd_sync(args: argparse.Namespace) -> None:
+    from sportsbet.data.database import SportsDatabase
+    from sportsbet.data.db_github_sync import push_database_to_github
+    from sportsbet.data.orchestrator import DataOrchestrator
+
+    db = SportsDatabase()
+    orch = DataOrchestrator(db)
+    sports = ["nba", "mlb"] if args.sport == "all" else [args.sport]
+
+    for sp in sports:
+        if args.mode == "daily":
+            stats = orch.sync_daily(sp, days_ahead=args.days, force_players=args.force)  # type: ignore[arg-type]
+        elif args.mode == "backtest":
+            stats = (
+                orch.sync_backtest_full(sp)
+                if args.full
+                else orch.sync_backtest_incremental(sp)
+            )
+        elif args.mode == "games":
+            stats = {
+                "days": orch.sync_games(
+                    sp,  # type: ignore[arg-type]
+                    incremental=args.incremental,
+                )
+            }
+        elif args.mode == "odds":
+            stats = {"days": orch.sync_odds(sp, replace=True)}  # type: ignore[arg-type]
+        elif args.mode == "live":
+            from sportsbet.services.live_sync import LiveSyncService
+
+            stats = LiveSyncService(db).sync_live(sp)  # type: ignore[arg-type]
+        elif args.mode == "players":
+            stats = orch.sync_players(sp, days_lineup=args.days, force=True)  # type: ignore[arg-type]
+        else:
+            raise RuntimeError(f"未知 sync 模式: {args.mode}")
+        logger.info("sync %s %s: %s", sp, args.mode, stats)
+
+    if args.push:
+        push_database_to_github(message=f"chore(data): sync {args.mode} {args.sport}")
+
+
+def cmd_watch(args: argparse.Namespace) -> None:
+    from sportsbet.services.live_sync import run_watch_loop
+
+    sports = ["nba", "mlb"] if args.sport == "all" else [args.sport]
+    run_watch_loop(
+        sports=sports,  # type: ignore[arg-type]
+        interval_sec=args.interval or None,
+        push_github=args.push,
+    )
 
 
 def cmd_backtest(args: argparse.Namespace) -> None:
@@ -101,10 +150,16 @@ def cmd_merge_backtest(args: argparse.Namespace) -> None:
 def cmd_refresh_backtest(args: argparse.Namespace) -> None:
     from sportsbet.data.database import SportsDatabase
     from sportsbet.data.db_github_sync import push_database_to_github
-    from sportsbet.services.data_refresh import run_full_backtest_refresh
+    from sportsbet.services.data_refresh import (
+        run_full_backtest_refresh,
+        run_incremental_backtest_refresh,
+    )
 
     db = SportsDatabase()
-    stats = run_full_backtest_refresh(db, args.sport, sync_api=not args.no_api)
+    if args.full:
+        stats = run_full_backtest_refresh(db, args.sport, sync_api=not args.no_api)
+    else:
+        stats = run_incremental_backtest_refresh(db, args.sport, sync_api=not args.no_api)
     logger.info("覆盤刷新: %s", stats)
     if args.push:
         push_database_to_github(message=f"chore(data): refresh backtest {args.sport}")
@@ -154,12 +209,30 @@ def main() -> None:
     p_scrape.add_argument("--days-back", type=int, default=7)
     p_scrape.set_defaults(func=cmd_scrape)
 
-    p_scan = sub.add_parser("scan", help="每日掃描正 EV")
+    p_scan = sub.add_parser("scan", help="每日掃描正 EV（真實盤口）")
     p_scan.add_argument("--sport", choices=["nba", "mlb"], default="nba")
-    p_scan.add_argument("--path", default="")
-    p_scan.add_argument("--offline", action="store_true", help="使用範例賠率")
     p_scan.add_argument("--notify", action="store_true", help="推送 Telegram/LINE")
     p_scan.set_defaults(func=cmd_scan)
+
+    p_sync = sub.add_parser("sync", help="資料同步（NBA/MLB 真實 API）")
+    p_sync.add_argument(
+        "--mode",
+        choices=["daily", "live", "backtest", "games", "odds", "players"],
+        default="daily",
+    )
+    p_sync.add_argument("--sport", choices=["nba", "mlb", "all"], default="all")
+    p_sync.add_argument("--days", type=int, default=7, help="daily/players 前瞻天數")
+    p_sync.add_argument("--full", action="store_true", help="backtest 完整重算")
+    p_sync.add_argument("--incremental", action="store_true", help="games 增量模式")
+    p_sync.add_argument("--force", action="store_true", help="daily 強制重抓球員統計")
+    p_sync.add_argument("--push", action="store_true", help="完成後推送 DB 至 GitHub")
+    p_sync.set_defaults(func=cmd_sync)
+
+    p_watch = sub.add_parser("watch", help="背景即時同步（常駐，供看板即時觀察）")
+    p_watch.add_argument("--sport", choices=["nba", "mlb", "all"], default="all")
+    p_watch.add_argument("--interval", type=int, default=0, help="秒；0=使用 LIVE_SYNC_INTERVAL_SEC")
+    p_watch.add_argument("--push", action="store_true", help="每次同步後推送 DB")
+    p_watch.set_defaults(func=cmd_watch)
 
     p_bt = sub.add_parser("backtest", help="（已停用）請改用 refresh-backtest")
     p_bt.add_argument("--sport", choices=["nba", "mlb"], default="nba")
@@ -181,9 +254,10 @@ def main() -> None:
     p_merge.add_argument("--no-backtest", action="store_true")
     p_merge.set_defaults(func=cmd_merge_backtest)
 
-    p_refresh = sub.add_parser("refresh-backtest", help="同步歷史賽果並重算全部覆盤")
+    p_refresh = sub.add_parser("refresh-backtest", help="增量同步歷史賽果並補齊覆盤（預設）")
     p_refresh.add_argument("--sport", choices=["nba", "mlb"], default="nba")
     p_refresh.add_argument("--no-api", action="store_true", help="不呼叫 API-Sports")
+    p_refresh.add_argument("--full", action="store_true", help="強制重算全部覆盤（較慢）")
     p_refresh.add_argument("--push", action="store_true", help="完成後推送 DB 至 GitHub")
     p_refresh.set_defaults(func=cmd_refresh_backtest)
 

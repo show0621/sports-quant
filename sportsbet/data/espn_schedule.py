@@ -118,6 +118,7 @@ class EspnScheduleClient:
                 away_logo_url=g.get("away_logo_url"),
             )
             out.append({**g, "game_id": gid})
+        db.mark_schedule_date_checked(sport, match_date)
         return pd.DataFrame(out)
 
     def backfill_dates(
@@ -127,12 +128,18 @@ class EspnScheduleClient:
         *,
         days_back: int,
         pause_sec: float = 0.25,
+        only_missing: bool = False,
     ) -> int:
         """依日迴圈抓取 ESPN 賽程（MLB 歷史 / API 備援用）。"""
         n = 0
         for offset in range(days_back):
             d = (date.today() - timedelta(days=offset)).isoformat()
+            if only_missing and db.is_schedule_date_checked(sport, d):
+                games = db.get_games(sport, d)
+                if not games.empty and games["home_score"].notna().all():
+                    continue
             df = self.sync_date_to_database(db, sport, d)
+            db.mark_schedule_date_checked(sport, d)
             n += len(df)
             time.sleep(pause_sec)
         return n

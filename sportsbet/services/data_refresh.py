@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import logging
+from datetime import date, timedelta
 from typing import Literal
 
 import pandas as pd
+from sportsbet import config
 from sportsbet.data.database import SportsDatabase
 from sportsbet.data.api_sports import calendar_season
 from sportsbet.data.provider import get_data_provider
@@ -16,26 +18,96 @@ logger = logging.getLogger(__name__)
 Sport = Literal["nba", "mlb"]
 
 
-def sync_historical_games(db: SportsDatabase, sport: Sport) -> int:
+def _should_fetch_blob_odds(match_date: str) -> bool:
+    """歷史回測不全量抓 Blob（404/慢）；近 N 天才抓即時盤。"""
+    try:
+        d = date.fromisoformat(str(match_date)[:10])
+    except ValueError:
+        return False
+    return (date.today() - d).days <= config.HISTORICAL_BLOB_ODDS_DAYS
+
+
+def prepare_backtest_odds(
+    db: SportsDatabase,
+    sport: Sport,
+    *,
+    incremental: bool = True,
+) -> dict[str, int]:
+    """清理占位賽事、同步 JBot、補 moneyline。"""
+    out: dict[str, int] = {}
+    out["cleaned_placeholders"] = db.cleanup_placeholder_final_games(sport)
+    db.finalize_games_with_scores(sport)
+
+    from sportsbet.data.jbot_odds_sync import sync_jbot_odds_to_db
+    from sportsbet.data.moneyline_backfill import backfill_tw_moneyline_odds
+
+    out["jbot_odds"] = sync_jbot_odds_to_db(db, sport, incremental=incremental)
+    out["moneyline_backfill"] = backfill_tw_moneyline_odds(db, sport)
+    return out
+
+
+def sync_historical_games(
+    db: SportsDatabase,
+    sport: Sport,
+    *,
+    incremental: bool = False,
+) -> int:
     """混合來源同步歷史賽程與賽果（nba_api / ESPN / API-Sports）。"""
     before = db.count_games_with_scores(sport)
     provider = get_data_provider(db)
     season = calendar_season(sport)
-    provider.fetch_historical_stats(sport, season)
+
+    if incremental and db.is_backtest_cache_warm(sport):
+        dates = db.get_dates_needing_backtest_work(sport, days_back=config.BACKTEST_DAYS)
+        logger.info(
+            "增量歷史同步 sport=%s 待補 %d 天（lookback=%d）",
+            sport, len(dates), config.BACKTEST_INCREMENTAL_LOOKBACK_DAYS,
+        )
+        for d in dates:
+            provider.fetch_daily_schedule(sport, d)
+            if db.count_odds_for_date(sport, d) == 0 and _should_fetch_blob_odds(d):
+                provider.fetch_odds(sport, d)
+        provider.fetch_historical_stats(sport, season, incremental=True)
+    else:
+        provider.fetch_historical_stats(sport, season, incremental=False)
+        d = date.today() - timedelta(days=config.BACKTEST_DAYS)
+        end = date.today()
+        while d <= end:
+            ds = d.isoformat()
+            provider.fetch_daily_schedule(sport, ds)
+            if db.count_odds_for_date(sport, ds) == 0 and _should_fetch_blob_odds(ds):
+                provider.fetch_odds(sport, ds)
+            db.mark_schedule_date_checked(sport, ds)
+            d += timedelta(days=1)
+
     finalized = db.finalize_games_with_scores(sport)
     after = db.count_games_with_scores(sport)
+    db.set_backtest_sync_meta(sport, "historical_synced_at", date.today().isoformat())
     logger.info(
-        "歷史賽果同步 sport=%s season=%s games_with_scores=%d finalized=%d",
-        sport, season, after, finalized,
+        "歷史賽果同步 sport=%s season=%s games_with_scores=%d finalized=%d incremental=%s",
+        sport, season, after, finalized, incremental,
     )
     return after
 
 
-def rebuild_predictions_from_forecasts(db: SportsDatabase, sport: Sport) -> int:
+def rebuild_predictions_from_forecasts(
+    db: SportsDatabase,
+    sport: Sport,
+    *,
+    game_ids: list[int] | None = None,
+    replace_all: bool = False,
+) -> int:
     """依 game_forecasts 的傷兵修正勝率重建 predictions（供模型健康度/資金回測）。"""
+    game_filter = ""
+    params: list = [sport]
+    if game_ids:
+        placeholders = ",".join("?" for _ in game_ids)
+        game_filter = f" AND g.id IN ({placeholders})"
+        params.extend(game_ids)
+
     with db.connection() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT g.id AS game_id, g.match_date, f.home_win_prob, f.away_win_prob,
                    f.prob_over, o.market, o.selection, o.odds, o.handicap
             FROM games g
@@ -44,8 +116,9 @@ def rebuild_predictions_from_forecasts(db: SportsDatabase, sport: Sport) -> int:
             WHERE g.sport = ?
               AND g.status = 'final'
               AND g.home_score IS NOT NULL
+              {game_filter}
             """,
-            (sport,),
+            tuple(params),
         ).fetchall()
 
     if not rows:
@@ -54,10 +127,18 @@ def rebuild_predictions_from_forecasts(db: SportsDatabase, sport: Sport) -> int:
     risk = RiskManager()
     n = 0
     with db.connection() as conn:
-        conn.execute(
-            "DELETE FROM predictions WHERE game_id IN (SELECT id FROM games WHERE sport = ?)",
-            (sport,),
-        )
+        if replace_all and not game_ids:
+            conn.execute(
+                "DELETE FROM predictions WHERE game_id IN (SELECT id FROM games WHERE sport = ?)",
+                (sport,),
+            )
+        elif game_ids:
+            placeholders = ",".join("?" for _ in game_ids)
+            conn.execute(
+                f"DELETE FROM predictions WHERE game_id IN ({placeholders})",
+                game_ids,
+            )
+
         for row in rows:
             market = row["market"]
             sel = row["selection"]
@@ -68,6 +149,7 @@ def rebuild_predictions_from_forecasts(db: SportsDatabase, sport: Sport) -> int:
                 prob = prob_o if sel == "over" else 1.0 - prob_o
             else:
                 continue
+            prob = max(0.001, min(0.999, prob))
             sig = risk.evaluate(prob, float(row["odds"]))
             conn.execute(
                 """
@@ -83,6 +165,74 @@ def rebuild_predictions_from_forecasts(db: SportsDatabase, sport: Sport) -> int:
     return n
 
 
+def run_incremental_backtest_refresh(
+    db: SportsDatabase | None = None,
+    sport: Sport = "nba",
+    *,
+    sync_api: bool = True,
+    sync_injuries: bool = True,
+    days_lineup: int = 7,
+) -> dict[str, int]:
+    """
+    增量覆盤刷新（預設）：
+    - 已寫入 DB 的歷史覆盤不重算
+    - 只補今天以前缺漏的賽程/賠率/forecast/predictions
+    - 最近 N 天會重查（比分可能晚到）
+    """
+    db = db or SportsDatabase()
+    svc = PredictionService(db)
+    out: dict[str, int] = {}
+    incremental = db.is_backtest_cache_warm(sport)
+
+    if sync_api:
+        out["games_with_scores"] = sync_historical_games(
+            db, sport, incremental=incremental,
+        )
+    else:
+        out["games_with_scores"] = db.count_games_with_scores(sport)
+
+    odds_prep = prepare_backtest_odds(db, sport, incremental=incremental)
+    out.update(odds_prep)
+
+    db.finalize_games_with_scores(sport)
+
+    if sync_injuries:
+        from sportsbet.data.player_ingestion import sync_v2_player_data
+
+        v2 = sync_v2_player_data(db, sport, days_lineup=days_lineup)
+        out.update(v2)
+
+    missing_fc = db.get_scored_games_missing_forecast(sport)
+    out["forecasts_missing_before"] = len(missing_fc)
+    need_full = not incremental or len(missing_fc) > 500
+    review = svc.run_backtest_reconcile(sport, only_missing=incremental and not need_full)
+    out["forecasts"] = len(review)
+    out["forecasts_reconciled"] = len(missing_fc) if incremental else len(review)
+
+    if review.empty and db.count_games_with_scores(sport) == 0:
+        raise RuntimeError(
+            "無法建立覆盤：尚無已結束賽事。請按側欄「同步資料」或確認網路與資料來源。"
+        )
+
+    missing_pred = db.get_scored_games_missing_predictions(sport)
+    out["predictions_missing_before"] = len(missing_pred)
+    if incremental and not missing_pred.empty:
+        game_ids = missing_pred["id"].astype(int).tolist()
+        out["predictions"] = rebuild_predictions_from_forecasts(
+            db, sport, game_ids=game_ids,
+        )
+    elif incremental:
+        out["predictions"] = 0
+    else:
+        out["predictions"] = rebuild_predictions_from_forecasts(
+            db, sport, replace_all=True,
+        )
+
+    svc.run_upcoming(sport, days_ahead=days_lineup)
+    db.set_backtest_sync_meta(sport, "backtest_refreshed_at", date.today().isoformat())
+    return out
+
+
 def run_full_backtest_refresh(
     db: SportsDatabase | None = None,
     sport: Sport = "nba",
@@ -92,7 +242,7 @@ def run_full_backtest_refresh(
     days_lineup: int = 7,
 ) -> dict[str, int]:
     """
-    完整覆盤刷新：
+    完整覆盤刷新（手動「重新產生全部覆盤」用）：
     1. 同步 API 歷史賽果（若有金鑰）
     2. 同步 ESPN 傷兵 + 預計先發（供未來/今日預測）
     3. 重算所有已結束賽事 forecast
@@ -103,9 +253,14 @@ def run_full_backtest_refresh(
     out: dict[str, int] = {}
 
     if sync_api:
-        out["games_with_scores"] = sync_historical_games(db, sport)
+        out["games_with_scores"] = sync_historical_games(
+            db, sport, incremental=False,
+        )
     else:
         out["games_with_scores"] = db.count_games_with_scores(sport)
+
+    odds_prep = prepare_backtest_odds(db, sport, incremental=False)
+    out.update(odds_prep)
 
     db.finalize_games_with_scores(sport)
 
@@ -115,7 +270,7 @@ def run_full_backtest_refresh(
         v2 = sync_v2_player_data(db, sport, days_lineup=days_lineup)
         out.update(v2)
 
-    review = svc.run_backtest_reconcile(sport)
+    review = svc.run_backtest_reconcile(sport, only_missing=False)
     out["forecasts"] = len(review)
 
     if review.empty and db.count_games_with_scores(sport) == 0:
@@ -123,6 +278,7 @@ def run_full_backtest_refresh(
             "無法建立覆盤：尚無已結束賽事。請按側欄「同步資料」或確認網路與資料來源。"
         )
 
-    out["predictions"] = rebuild_predictions_from_forecasts(db, sport)
+    out["predictions"] = rebuild_predictions_from_forecasts(db, sport, replace_all=True)
     svc.run_upcoming(sport, days_ahead=days_lineup)
+    db.set_backtest_sync_meta(sport, "backtest_refreshed_at", date.today().isoformat())
     return out

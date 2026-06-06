@@ -119,42 +119,7 @@ class WandaScraper:
         return self.fetch_current(sport)  # type: ignore[arg-type]
 
     def load_sample_format(self) -> pd.DataFrame:
-        """回傳標準 schema 範例（離線開發）。"""
-        return pd.DataFrame(
-            [
-                {
-                    "source": "sample",
-                    "scrape_time": "2025-10-01T00:00:00+00:00",
-                    "event_id": "demo-1",
-                    "sport": "nba",
-                    "league": "NBA",
-                    "match_datetime": "2025-10-02T00:00:00+00:00",
-                    "match_date": "2025-10-02",
-                    "home_team": "Los Angeles Lakers",
-                    "away_team": "Boston Celtics",
-                    "market": "moneyline",
-                    "selection": "home",
-                    "handicap": None,
-                    "odds": 1.75,
-                    "min_parlay": 1,
-                    "odds_phase": "close",
-                },
-                {
-                    "source": "sample",
-                    "scrape_time": "2025-10-01T00:00:00+00:00",
-                    "event_id": "demo-1",
-                    "sport": "nba",
-                    "league": "NBA",
-                    "match_datetime": "2025-10-02T00:00:00+00:00",
-                    "match_date": "2025-10-02",
-                    "home_team": "Los Angeles Lakers",
-                    "away_team": "Boston Celtics",
-                    "market": "moneyline",
-                    "selection": "away",
-                    "handicap": None,
-                    "odds": 1.75,
-                    "min_parlay": 2,
-                    "odds_phase": "close",
-                },
-            ]
+        """已停用：僅允許真實資料來源。"""
+        raise RuntimeError(
+            "已停用範例/虛擬賠率。請使用 --live（運彩 Blob）或 --jbot（歷史盤口）。"
         )

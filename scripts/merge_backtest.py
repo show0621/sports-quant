@@ -1,11 +1,4 @@
-"""
-合併賠率與賽果、執行回測。
-
-用法:
-  python scripts/merge_backtest.py --sport nba
-  python scripts/merge_backtest.py --sport mlb --jbot --start 2024-10-01 --end 2024-10-31
-  python scripts/merge_backtest.py --sport nba --live --save
-"""
+"""合併賠率與賽果、執行回測（僅真實資料）。"""
 from __future__ import annotations
 
 import argparse
@@ -31,9 +24,6 @@ def _load_odds(args: argparse.Namespace) -> "pd.DataFrame":
 
     scraper = WandaScraper()
     frames: list[pd.DataFrame] = []
-
-    if args.sample:
-        return scraper.load_sample_format()
 
     if args.live:
         df = scraper.fetch_current(args.sport)
@@ -62,16 +52,16 @@ def _load_odds(args: argparse.Namespace) -> "pd.DataFrame":
             sport_odds = hist_odds[hist_odds["sport"] == args.sport]
             if not sport_odds.empty:
                 return sport_odds
-        logger.warning("無賠率來源，使用範例資料")
-        return scraper.load_sample_format()
+        raise RuntimeError(
+            "無賠率資料。請加上 --live（運彩 Blob）或 --jbot（需 JBOT_TOKEN）。"
+        )
 
     return pd.concat(frames, ignore_index=True)
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="合併 timeline 並執行回測")
+    p = argparse.ArgumentParser(description="合併 timeline 並執行回測（真實賠率）")
     p.add_argument("--sport", choices=["nba", "mlb"], default="nba")
-    p.add_argument("--sample", action="store_true", help="使用內建範例賠率")
     p.add_argument("--live", action="store_true", help="抓取運彩 Blob 即時/受注")
     p.add_argument("--jbot", action="store_true", help="抓取 JBot 歷史賠率")
     p.add_argument("--start", help="JBot 起始日期 YYYY-MM-DD")
@@ -90,6 +80,9 @@ def main() -> None:
     p.add_argument("--no-backtest", action="store_true", help="僅合併不跑回測")
     args = p.parse_args()
 
+    if not args.live and not args.jbot:
+        args.live = True
+
     odds = _load_odds(args)
     merged = merge_timeline(odds, args.sport)  # type: ignore[arg-type]
 
@@ -107,7 +100,7 @@ def main() -> None:
 
     print(f"合併列數: {len(merged)} | 回測可用: {len(dataset)}")
     if dataset.empty:
-        print("回測資料為空：請先 python main.py fetch，並確認賠率日期與隊名可對齊")
+        print("回測資料為空：請先 python main.py sync daily，並確認賠率日期與隊名可對齊")
         sys.exit(1)
 
     if args.no_backtest:

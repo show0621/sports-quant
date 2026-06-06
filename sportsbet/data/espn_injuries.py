@@ -11,6 +11,7 @@ import logging
 from datetime import date
 from typing import Any, Literal
 
+import pandas as pd
 import requests
 
 from sportsbet.data.database import SportsDatabase
@@ -216,12 +217,9 @@ def sync_espn_rosters_for_teams(
     team_espn_ids: set[str | int],
     *,
     client: EspnInjuryClient | None = None,
-    season: str | None = None,
 ) -> int:
-    """同步指定球隊 roster 至 players（預設 VORP/WAR 供陣容引擎使用）。"""
+    """同步指定球隊 roster 至 players（不含統計；統計由 nba_api/ESPN stats 模組負責）。"""
     client = client or EspnInjuryClient()
-    season = season or str(date.today().year)
-    today = date.today().isoformat()
     n = 0
 
     for tid in team_espn_ids:
@@ -231,7 +229,6 @@ def sync_espn_rosters_for_teams(
             logger.warning("ESPN roster 失敗 team_id=%s: %s", tid, exc)
             continue
 
-        # 從 teams API 找 displayName
         team_name = _team_name_from_id(client, sport, tid)
 
         for ath in athletes:
@@ -242,21 +239,6 @@ def sync_espn_rosters_for_teams(
             pos = (ath.get("position") or {}).get("abbreviation") or ""
             team = resolve_team_in_database(db, sport, normalize_espn_team(team_name, sport))
             db.upsert_player(sport, pid, name, team, pos)
-
-            if sport == "nba":
-                vorp = _default_vorp_nba(pos)
-                db.upsert_player_stats(
-                    sport, pid, today, season=season,
-                    bpm=0.0, vorp=vorp, usg_pct=0.2, pace=100.0,
-                    rolling_off_rating=0.0, hot_cold_index=0.0,
-                )
-            else:
-                war = _default_war_mlb(pos)
-                db.upsert_player_stats(
-                    sport, pid, today, season=season,
-                    war=war, wrc_plus=100.0, fip=4.0,
-                    rolling_off_rating=0.0, hot_cold_index=0.0,
-                )
             n += 1
 
     return n
@@ -267,17 +249,6 @@ def _team_name_from_id(client: EspnInjuryClient, sport: Sport, team_id: str | in
         if str(tm.get("id")) == str(team_id):
             return str(tm.get("displayName") or tm.get("name") or "")
     return ""
-
-
-def _default_vorp_nba(position: str) -> float:
-    boosts = {"PG": 1.8, "SG": 1.4, "SF": 1.5, "PF": 1.6, "C": 1.7, "G": 1.3, "F": 1.4}
-    return boosts.get(position.upper(), 1.0)
-
-
-def _default_war_mlb(position: str) -> float:
-    if position.upper() in ("SP", "RP"):
-        return 2.5
-    return 1.8
 
 
 def sync_espn_injuries_and_rosters(
@@ -336,14 +307,11 @@ def sync_espn_projected_lineups(
     client: EspnInjuryClient | None = None,
 ) -> int:
     """
-    用 ESPN roster 近似建立 projected_lineups（目的：讓傷兵 player_id 能匹配陣容排除邏輯）。
-    - NBA：每隊取前 8 位球員，前 5 位視為 starter，給定固定分鐘數
-    - MLB：每隊取前 9 位球員，給定固定預估 innings
+    依 ESPN roster + DB 真實上場時間/評分建立 projected_lineups。
+    - NBA：依 vorp/上場時間取前 8 人
+    - MLB：依 war 取前 9 人（先發投手優先）
     """
-
     client = client or EspnInjuryClient()
-    today = date.today().isoformat()
-    season = str(date.today().year)
 
     games_by_date: dict[str, Any] = {}
     participating_teams: set[str] = set()
@@ -371,9 +339,6 @@ def sync_espn_projected_lineups(
         return 0
 
     n = 0
-    expected_minutes_nba = [34, 32, 30, 28, 26, 22, 18, 15]
-    expected_innings_mlb = [6, 1, 1, 1, 1, 0, 0, 0, 0]
-
     for d, games in games_by_date.items():
         teams_today = set(games["home_team"]) | set(games["away_team"])
         for team_name in teams_today:
@@ -381,79 +346,47 @@ def sync_espn_projected_lineups(
             if not athletes:
                 continue
 
-            # 依 espn athlete id 去重，並保留 ESPN 回傳順序
-            unique_by_pid: dict[str, dict[str, Any]] = {}
+            team_players = db.get_players_by_team(sport, team_name)
+            metric_col = "vorp" if sport == "nba" else "war"
+
+            ranked: list[tuple[str, dict[str, Any], float, float]] = []
             for ath in athletes:
                 pid = _athlete_id(ath)
-                if not pid or pid in unique_by_pid:
+                if not pid:
                     continue
-                unique_by_pid[pid] = ath
-
-            ordered = list(unique_by_pid.values())
-            if sport == "nba":
-                ordered = ordered[:8]
-                for i, ath in enumerate(ordered):
-                    pid = _athlete_id(ath)
-                    if not pid:
-                        continue
-                    name = ath.get("displayName") or ""
+                row = team_players[team_players["player_id"] == pid]
+                metric = float(row.iloc[0][metric_col]) if not row.empty and pd.notna(row.iloc[0].get(metric_col)) else None
+                if metric is None:
+                    continue
+                if sport == "nba":
+                    minutes = float(row.iloc[0].get("usg_pct") or 0.2) * 240.0 if not row.empty else 20.0
+                    if not row.empty and pd.notna(row.iloc[0].get("rolling_off_rating")):
+                        minutes = max(minutes, 15.0)
+                else:
                     pos = (ath.get("position") or {}).get("abbreviation") or ""
-                    vorp = _default_vorp_nba(pos)
+                    minutes = 6.0 if pos == "SP" else 1.0
+                ranked.append((pid, ath, metric, minutes))
 
-                    db.upsert_player(sport, pid, name, team_name, pos)
-                    db.upsert_player_stats(
-                        sport,
-                        pid,
-                        today,
-                        season=season,
-                        bpm=0.0,
-                        vorp=vorp,
-                        usg_pct=0.2,
-                        pace=100.0,
-                        rolling_off_rating=0.0,
-                        hot_cold_index=0.0,
-                    )
-                    db.upsert_projected_lineup(
-                        sport,
-                        team_name,
-                        d,
-                        pid,
-                        expected_minutes=float(expected_minutes_nba[i]),
-                        expected_innings=None,
-                        is_starter=i < 5,
-                    )
-                    n += 1
-            else:
-                ordered = ordered[:9]
-                for i, ath in enumerate(ordered):
-                    pid = _athlete_id(ath)
-                    if not pid:
-                        continue
-                    name = ath.get("displayName") or ""
-                    pos = (ath.get("position") or {}).get("abbreviation") or ""
-                    war = _default_war_mlb(pos)
+            if not ranked:
+                continue
 
-                    db.upsert_player(sport, pid, name, team_name, pos)
-                    db.upsert_player_stats(
-                        sport,
-                        pid,
-                        today,
-                        season=season,
-                        war=war,
-                        wrc_plus=100.0,
-                        fip=4.0,
-                        rolling_off_rating=0.0,
-                        hot_cold_index=0.0,
-                    )
-                    db.upsert_projected_lineup(
-                        sport,
-                        team_name,
-                        d,
-                        pid,
-                        expected_minutes=None,
-                        expected_innings=float(expected_innings_mlb[i]),
-                        is_starter=i < 5,
-                    )
-                    n += 1
+            ranked.sort(key=lambda x: x[2], reverse=True)
+            limit = 8 if sport == "nba" else 9
+            ranked = ranked[:limit]
+
+            for i, (pid, ath, _metric, minutes) in enumerate(ranked):
+                name = ath.get("displayName") or ""
+                pos = (ath.get("position") or {}).get("abbreviation") or ""
+                db.upsert_player(sport, pid, name, team_name, pos)
+                db.upsert_projected_lineup(
+                    sport,
+                    team_name,
+                    d,
+                    pid,
+                    expected_minutes=float(minutes) if sport == "nba" else None,
+                    expected_innings=float(minutes) if sport == "mlb" else None,
+                    is_starter=i < (5 if sport == "nba" else 1),
+                )
+                n += 1
 
     return n

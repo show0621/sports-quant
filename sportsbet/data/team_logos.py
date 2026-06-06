@@ -131,7 +131,7 @@ def resolve_team_in_database(db, sport: Sport, candidate: str) -> str:
                 UNION SELECT team FROM players WHERE sport = ?
             )
             """,
-            (sport,),
+            (sport, sport, sport, sport),
         ).fetchall()
     known = {r[0] for r in rows if r[0]}
 

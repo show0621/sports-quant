@@ -1,4 +1,6 @@
-"""執行回測。用法: python scripts/run_backtest.py --sport nba"""
+"""執行回測（SQLite 真實資料）。用法: python scripts/run_backtest.py --sport nba"""
+from __future__ import annotations
+
 import argparse
 import sys
 from pathlib import Path
@@ -6,32 +8,24 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import numpy as np
-
 from sportsbet.backtest.engine import BacktestEngine
-from sportsbet.data.storage import load_team_stats
-from sportsbet.data.wanda_scraper import WandaScraper
-from sportsbet.models.game_predictor import GamePredictor
+from sportsbet.data.database import SportsDatabase
+from sportsbet.services.data_refresh import run_incremental_backtest_refresh
 
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--sport", default="nba")
+    p.add_argument("--sport", choices=["nba", "mlb"], default="nba")
     args = p.parse_args()
 
-    team_stats = load_team_stats(args.sport)
-    if team_stats.empty:
-        print("請先抓取 API 資料")
+    db = SportsDatabase()
+    run_incremental_backtest_refresh(db, args.sport, sync_api=True, sync_injuries=True)
+    df = db.get_backtest_frame(args.sport)
+    if df.empty:
+        print("無回測資料，請先執行 python main.py sync daily --sport", args.sport)
         sys.exit(1)
 
-    odds = WandaScraper().load_sample_format()
-    predictor = GamePredictor(args.sport)  # type: ignore[arg-type]
-    signals = predictor.scan_dataframe(team_stats, odds)
-    rng = np.random.default_rng(0)
-    signals["won"] = (rng.random(len(signals)) < signals["model_prob"]).astype(int)
-    signals["match_date"] = "2025-01-01"
-
-    result = BacktestEngine().run(signals)
+    result = BacktestEngine().run(df)
     print(result.summary)
     print(result.accuracy)
 

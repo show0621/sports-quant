@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS odds (
     selection TEXT NOT NULL,
     handicap REAL,
     odds REAL NOT NULL,
-    bookmaker TEXT DEFAULT 'mock',
+    bookmaker TEXT DEFAULT 'sportslottery',
     odds_phase TEXT DEFAULT 'open',
     created_at TEXT DEFAULT (datetime('now')),
     FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE
@@ -154,7 +154,7 @@ CREATE TABLE IF NOT EXISTS injury_reports (
     status TEXT NOT NULL,
     injury_type TEXT,
     expected_return TEXT,
-    source TEXT DEFAULT 'mock',
+    source TEXT DEFAULT 'espn',
     updated_at TEXT DEFAULT (datetime('now')),
     UNIQUE(sport, player_id, report_date),
     FOREIGN KEY (sport, player_id) REFERENCES players(sport, player_id)
@@ -175,6 +175,33 @@ CREATE TABLE IF NOT EXISTS projected_lineups (
 CREATE INDEX IF NOT EXISTS idx_players_team ON players(sport, team);
 CREATE INDEX IF NOT EXISTS idx_injury_date ON injury_reports(sport, report_date);
 CREATE INDEX IF NOT EXISTS idx_player_stats_date ON player_advanced_stats(sport, as_of_date);
+
+CREATE TABLE IF NOT EXISTS backtest_sync_meta (
+    sport TEXT NOT NULL,
+    meta_key TEXT NOT NULL,
+    meta_value TEXT,
+    updated_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(sport, meta_key)
+);
+
+CREATE TABLE IF NOT EXISTS team_aliases (
+    sport TEXT NOT NULL,
+    canonical_name TEXT NOT NULL,
+    alias TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'builtin',
+    PRIMARY KEY (sport, alias, source)
+);
+
+CREATE TABLE IF NOT EXISTS sync_health (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sport TEXT NOT NULL,
+    sync_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    message TEXT,
+    duration_ms INTEGER,
+    synced_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_sync_health_sport ON sync_health(sport, sync_type, synced_at);
 """
 
 _MIGRATION_COLUMNS = [
@@ -278,15 +305,16 @@ class SportsDatabase:
         odds: float,
         *,
         handicap: float | None = None,
-        bookmaker: str = "mock",
+        bookmaker: str = "sportslottery",
+        odds_phase: str = "close",
     ) -> None:
         with self.connection() as conn:
             conn.execute(
                 """
-                INSERT INTO odds (game_id, market, selection, handicap, odds, bookmaker)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO odds (game_id, market, selection, handicap, odds, bookmaker, odds_phase)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (game_id, market, selection, handicap, odds, bookmaker),
+                (game_id, market, selection, handicap, odds, bookmaker, odds_phase),
             )
 
     def upsert_team_stats(
@@ -386,7 +414,11 @@ class SportsDatabase:
             sql += " AND match_date = ?"
             params.append(match_date)
         if with_scores_only:
-            sql += " AND home_score IS NOT NULL AND away_score IS NOT NULL"
+            sql += (
+                " AND home_score IS NOT NULL AND away_score IS NOT NULL"
+                " AND (home_score + away_score) > 0"
+                " AND match_date <= date('now')"
+            )
         sql += " ORDER BY match_date, id"
         with self.connection() as conn:
             return pd.read_sql_query(sql, conn, params=params)
@@ -435,10 +467,18 @@ class SportsDatabase:
                 """
                 SELECT g.id AS game_id, g.match_date, g.home_team, g.away_team,
                        g.home_score, g.away_score, g.status,
-                       o.market, o.selection, o.handicap, o.odds,
+                       o.market, o.selection, o.handicap, o.odds, o.created_at AS odds_updated_at,
                        p.model_prob, p.ev, p.stake_fraction AS kelly_stake
                 FROM games g
-                LEFT JOIN odds o ON o.game_id = g.id
+                LEFT JOIN (
+                    SELECT o2.*
+                    FROM odds o2
+                    INNER JOIN (
+                        SELECT game_id, market, selection, MAX(id) AS max_id
+                        FROM odds
+                        GROUP BY game_id, market, selection
+                    ) lo ON o2.id = lo.max_id
+                ) o ON o.game_id = g.id
                 LEFT JOIN predictions p ON p.game_id = g.id
                     AND p.market = o.market
                     AND (p.selection = o.selection OR p.selection IS NULL)
@@ -448,6 +488,86 @@ class SportsDatabase:
                 conn,
                 params=(sport, d),
             )
+
+    def clear_odds_for_date(
+        self,
+        sport: Sport,
+        match_date: str,
+        *,
+        bookmaker: str = "sportslottery",
+    ) -> int:
+        with self.connection() as conn:
+            cur = conn.execute(
+                """
+                DELETE FROM odds
+                WHERE bookmaker = ?
+                  AND game_id IN (
+                      SELECT id FROM games WHERE sport = ? AND match_date = ?
+                  )
+                """,
+                (bookmaker, sport, match_date),
+            )
+            return cur.rowcount
+
+    def record_sync_health(
+        self,
+        sport: Sport,
+        sync_type: str,
+        status: str,
+        *,
+        message: str | None = None,
+        duration_ms: int | None = None,
+    ) -> None:
+        with self.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO sync_health (sport, sync_type, status, message, duration_ms)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (sport, sync_type, status, message, duration_ms),
+            )
+
+    def get_last_sync_health(
+        self,
+        sport: Sport,
+        sync_type: str | None = None,
+    ) -> pd.DataFrame:
+        sql = "SELECT * FROM sync_health WHERE sport = ?"
+        params: list = [sport]
+        if sync_type:
+            sql += " AND sync_type = ?"
+            params.append(sync_type)
+        sql += " ORDER BY synced_at DESC LIMIT 20"
+        with self.connection() as conn:
+            return pd.read_sql_query(sql, conn, params=tuple(params))
+
+    def get_sync_status_summary(self, sport: Sport) -> dict[str, str | None]:
+        """各 sync_type 最後一次成功/失敗時間。"""
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT sync_type, status, message, synced_at
+                FROM sync_health
+                WHERE sport = ?
+                ORDER BY synced_at DESC
+                """,
+                (sport,),
+            ).fetchall()
+        summary: dict[str, str | None] = {}
+        for row in rows:
+            key = str(row["sync_type"])
+            if key not in summary:
+                summary[key] = str(row["synced_at"])
+        for meta_key, label in (
+            ("live_synced_at", "live"),
+            ("daily_synced_at", "daily"),
+            ("backtest_refreshed_at", "backtest"),
+        ):
+            if label not in summary:
+                val = self.get_backtest_sync_meta(sport, meta_key)
+                if val:
+                    summary[label] = val
+        return summary
 
     def upsert_game_forecast(self, forecast: Any) -> None:
         row = forecast.to_db_row()
@@ -590,7 +710,7 @@ class SportsDatabase:
         *,
         injury_type: str | None = None,
         expected_return: str | None = None,
-        source: str = "mock",
+        source: str = "espn",
     ) -> None:
         with self.connection() as conn:
             conn.execute(
@@ -653,7 +773,7 @@ class SportsDatabase:
                 params=(sport, team),
             )
 
-    def clear_injuries(self, sport: Sport, *, source: str | None = "mock") -> int:
+    def clear_injuries(self, sport: Sport, *, source: str | None = "espn") -> int:
         with self.connection() as conn:
             if source:
                 cur = conn.execute(
@@ -718,8 +838,31 @@ class SportsDatabase:
         with self.connection() as conn:
             return pd.read_sql_query(sql, conn, params=(sport, start_date, end_date))
 
+    def cleanup_placeholder_final_games(self, sport: Sport) -> int:
+        """修正未開賽或未得分卻標為 final 的占位賽事。"""
+        with self.connection() as conn:
+            cur = conn.execute(
+                """
+                UPDATE games
+                SET status = 'scheduled',
+                    home_score = NULL,
+                    away_score = NULL
+                WHERE sport = ?
+                  AND status = 'final'
+                  AND (
+                      match_date > date('now')
+                      OR (
+                          home_score IS NOT NULL AND away_score IS NOT NULL
+                          AND (home_score + away_score) = 0
+                      )
+                  )
+                """,
+                (sport,),
+            )
+            return cur.rowcount
+
     def finalize_games_with_scores(self, sport: Sport) -> int:
-        """將已有比分但狀態未標記 final 的賽事更新為 final。"""
+        """將已有有效比分且賽日不晚於今日的賽事標記為 final。"""
         with self.connection() as conn:
             cur = conn.execute(
                 """
@@ -728,6 +871,8 @@ class SportsDatabase:
                 WHERE sport = ?
                   AND home_score IS NOT NULL
                   AND away_score IS NOT NULL
+                  AND (home_score + away_score) > 0
+                  AND match_date <= date('now')
                   AND (status IS NULL OR status NOT IN ('final', 'FT', 'AOT', 'Finished', 'POST'))
                 """,
                 (sport,),
@@ -769,8 +914,11 @@ class SportsDatabase:
                 FROM games g
                 LEFT JOIN game_forecasts f ON f.game_id = g.id
                 WHERE g.sport = ?
+                  AND g.status = 'final'
                   AND g.home_score IS NOT NULL
                   AND g.away_score IS NOT NULL
+                  AND (g.home_score + g.away_score) > 0
+                  AND g.match_date <= date('now')
                   AND f.game_id IS NULL
                 """,
                 (sport,),
@@ -786,8 +934,11 @@ class SportsDatabase:
                 FROM games g
                 LEFT JOIN predictions p ON p.game_id = g.id
                 WHERE g.sport = ?
+                  AND g.status = 'final'
                   AND g.home_score IS NOT NULL
                   AND g.away_score IS NOT NULL
+                  AND (g.home_score + g.away_score) > 0
+                  AND g.match_date <= date('now')
                   AND p.game_id IS NULL
                 """,
                 (sport,),
@@ -822,9 +973,180 @@ class SportsDatabase:
                 WHERE g.sport = ?
                   AND g.status = 'final'
                   AND g.home_score IS NOT NULL
+                  AND (g.home_score + g.away_score) > 0
+                  AND g.match_date <= date('now')
                   AND p.model_prob IS NOT NULL
                 ORDER BY g.match_date, g.id
                 """,
                 conn,
                 params=(sport,),
             )
+
+    def get_backtest_sync_meta(self, sport: Sport, meta_key: str) -> str | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT meta_value FROM backtest_sync_meta WHERE sport = ? AND meta_key = ?",
+                (sport, meta_key),
+            ).fetchone()
+            return str(row["meta_value"]) if row and row["meta_value"] is not None else None
+
+    def set_backtest_sync_meta(self, sport: Sport, meta_key: str, meta_value: str) -> None:
+        with self.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO backtest_sync_meta (sport, meta_key, meta_value, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(sport, meta_key) DO UPDATE SET
+                    meta_value = excluded.meta_value,
+                    updated_at = excluded.updated_at
+                """,
+                (sport, meta_key, meta_value, datetime.now().isoformat(timespec="seconds")),
+            )
+
+    def is_backtest_cache_warm(self, sport: Sport) -> bool:
+        """是否已有覆盤快取（至少一場已結束賽事且含 forecast）。"""
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS n
+                FROM game_forecasts f
+                JOIN games g ON g.id = f.game_id
+                WHERE f.sport = ?
+                  AND g.status = 'final'
+                  AND g.home_score IS NOT NULL
+                  AND (g.home_score + g.away_score) > 0
+                  AND g.match_date <= date('now')
+                """,
+                (sport,),
+            ).fetchone()
+            return int(row["n"]) > 0 if row else False
+
+    def count_games_for_date(self, sport: Sport, match_date: str) -> int:
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM games WHERE sport = ? AND match_date = ?",
+                (sport, match_date),
+            ).fetchone()
+            return int(row["n"]) if row else 0
+
+    def is_schedule_date_checked(self, sport: Sport, match_date: str) -> bool:
+        return self.get_backtest_sync_meta(sport, f"schedule_checked_{match_date}") == "1"
+
+    def mark_schedule_date_checked(self, sport: Sport, match_date: str) -> None:
+        self.set_backtest_sync_meta(sport, f"schedule_checked_{match_date}", "1")
+
+    def get_scored_games_missing_forecast(self, sport: Sport) -> pd.DataFrame:
+        """已完賽但尚未產生 game_forecasts 的場次。"""
+        with self.connection() as conn:
+            return pd.read_sql_query(
+                """
+                SELECT g.*
+                FROM games g
+                LEFT JOIN game_forecasts f ON f.game_id = g.id
+                WHERE g.sport = ?
+                  AND g.status = 'final'
+                  AND g.home_score IS NOT NULL
+                  AND g.away_score IS NOT NULL
+                  AND (g.home_score + g.away_score) > 0
+                  AND g.match_date <= date('now')
+                  AND f.game_id IS NULL
+                ORDER BY g.match_date, g.id
+                """,
+                conn,
+                params=(sport,),
+            )
+
+    def get_scored_games_missing_predictions(self, sport: Sport) -> pd.DataFrame:
+        """已完賽但尚未產生 predictions 的場次。"""
+        with self.connection() as conn:
+            return pd.read_sql_query(
+                """
+                SELECT DISTINCT g.*
+                FROM games g
+                JOIN game_forecasts f ON f.game_id = g.id
+                LEFT JOIN predictions p ON p.game_id = g.id
+                WHERE g.sport = ?
+                  AND g.status = 'final'
+                  AND g.home_score IS NOT NULL
+                  AND g.away_score IS NOT NULL
+                  AND (g.home_score + g.away_score) > 0
+                  AND g.match_date <= date('now')
+                  AND p.game_id IS NULL
+                ORDER BY g.match_date, g.id
+                """,
+                conn,
+                params=(sport,),
+            )
+
+    def get_games_by_ids(self, game_ids: list[int]) -> pd.DataFrame:
+        if not game_ids:
+            return pd.DataFrame()
+        placeholders = ",".join("?" for _ in game_ids)
+        with self.connection() as conn:
+            return pd.read_sql_query(
+                f"SELECT * FROM games WHERE id IN ({placeholders}) ORDER BY match_date, id",
+                conn,
+                params=game_ids,
+            )
+
+    def get_dates_needing_backtest_work(self, sport: Sport, *, days_back: int) -> list[str]:
+        """
+        回測區間內、今天以前需補齊的日期：
+        - 尚未檢查過的日期
+        - 或最近 lookback 內（比分可能晚到）
+        - 或有已結束賽事但缺 forecast / odds
+        """
+        from sportsbet import config
+
+        lookback = config.BACKTEST_INCREMENTAL_LOOKBACK_DAYS
+        today = date.today()
+        yesterday = today - timedelta(days=1)
+        start = today - timedelta(days=days_back)
+        out: set[str] = set()
+
+        d = start
+        while d <= yesterday:
+            ds = d.isoformat()
+            if not self.is_schedule_date_checked(sport, ds):
+                out.add(ds)
+            d += timedelta(days=1)
+
+        for offset in range(1, lookback + 1):
+            out.add((today - timedelta(days=offset)).isoformat())
+
+        start_s, end_s = start.isoformat(), yesterday.isoformat()
+        with self.connection() as conn:
+            for row in conn.execute(
+                """
+                SELECT DISTINCT g.match_date
+                FROM games g
+                LEFT JOIN game_forecasts f ON f.game_id = g.id
+                WHERE g.sport = ?
+                  AND g.match_date >= ?
+                  AND g.match_date <= ?
+                  AND g.home_score IS NOT NULL
+                  AND g.away_score IS NOT NULL
+                  AND f.game_id IS NULL
+                """,
+                (sport, start_s, end_s),
+            ).fetchall():
+                out.add(str(row["match_date"])[:10])
+
+            for row in conn.execute(
+                """
+                SELECT DISTINCT g.match_date
+                FROM games g
+                LEFT JOIN odds o ON o.game_id = g.id
+                WHERE g.sport = ?
+                  AND g.match_date >= ?
+                  AND g.match_date <= ?
+                  AND g.home_score IS NOT NULL
+                  AND g.away_score IS NOT NULL
+                GROUP BY g.match_date
+                HAVING COUNT(o.id) = 0
+                """,
+                (sport, start_s, end_s),
+            ).fetchall():
+                out.add(str(row["match_date"])[:10])
+
+        return sorted(d for d in out if start_s <= d <= end_s)

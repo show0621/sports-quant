@@ -104,11 +104,14 @@ class DynamicRosterRatingEngine:
                 how="left",
             )
         else:
-            players = players.head(8 if sport == "nba" else 9).copy()
-            if sport == "nba":
-                players["expected_minutes"] = [34, 32, 30, 28, 26, 22, 18, 15][: len(players)]
-            else:
-                players["expected_innings"] = [6, 1, 1, 1, 1, 0, 0, 0, 0][: len(players)]
+            players = players[
+                players["vorp"].notna() | players["war"].notna()
+            ].head(8 if sport == "nba" else 9).copy()
+            if players.empty:
+                return RosterRatingResult(
+                    sport=sport, team=team, match_date=match_date,
+                    baseline_rating=0.0, adjusted_rating=0.0, injury_penalty=0.0, active_count=0,
+                )
 
         status_map = self._injury_status_map(sport, team, match_date)
 

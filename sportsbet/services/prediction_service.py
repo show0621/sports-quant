@@ -7,6 +7,7 @@ from typing import Literal
 import pandas as pd
 
 from sportsbet.data.database import SportsDatabase
+from sportsbet.data.point_in_time_stats import PointInTimeStatsBuilder
 from sportsbet.data.team_logos import espn_logo_url
 from sportsbet.models.analytics_engine import AnalyticsEngine
 from sportsbet.models.forecast import GameForecast, build_game_forecast, forecasts_to_matchup_table
@@ -25,6 +26,7 @@ class PredictionService:
         stats: pd.DataFrame,
         *,
         total_line: float | None = None,
+        use_roster: bool = True,
     ) -> GameForecast | None:
         ht, at = game_row["home_team"], game_row["away_team"]
         if ht not in stats.index or at not in stats.index:
@@ -64,6 +66,7 @@ class PredictionService:
             actual_home_score=int(game_row["home_score"]) if pd.notna(game_row.get("home_score")) else None,
             actual_away_score=int(game_row["away_score"]) if pd.notna(game_row.get("away_score")) else None,
             db=self.db,
+            use_roster=use_roster,
         )
 
     def run_for_date(self, sport: Sport, match_date: str | None = None) -> list[GameForecast]:
@@ -86,20 +89,45 @@ class PredictionService:
                 forecasts.append(fc)
         return forecasts
 
-    def run_backtest_reconcile(self, sport: Sport) -> pd.DataFrame:
-        """對所有已結束賽事重新預測並寫入覆盤紀錄。"""
-        games = self.db.get_games(sport, with_scores_only=True)
+    def run_backtest_reconcile(
+        self,
+        sport: Sport,
+        *,
+        only_missing: bool = False,
+        game_ids: list[int] | None = None,
+    ) -> pd.DataFrame:
+        """對已結束賽事重新預測（賽前 stats，無傷兵前視偏差）。"""
+        if game_ids is not None:
+            games = self.db.get_games_by_ids(game_ids)
+        elif only_missing:
+            games = self.db.get_scored_games_missing_forecast(sport)
+        else:
+            games = self.db.get_games(sport, with_scores_only=True)
         if games.empty:
             return pd.DataFrame()
-        stats = self.db.get_team_stats(sport).set_index("team")
+
+        games = games.sort_values(["match_date", "id"]).reset_index(drop=True)
+        builder = PointInTimeStatsBuilder.from_db(self.db, sport)
         forecasts: list[GameForecast] = []
-        for _, g in games.iterrows():
+        total = len(games)
+
+        for i, (_, g) in enumerate(games.iterrows(), start=1):
             g = g.copy()
             g["status"] = "final"
-            fc = self.forecast_game_row(sport, g, stats)
+            d = str(g["match_date"])[:10]
+            stats = builder.snapshot_before(d)
+            if stats.empty or g["home_team"] not in stats.index or g["away_team"] not in stats.index:
+                continue
+            fc = self.forecast_game_row(sport, g, stats, use_roster=False)
             if fc:
                 self.db.upsert_game_forecast(fc)
                 forecasts.append(fc)
+            if i % 200 == 0 or i == total:
+                import logging
+                logging.getLogger(__name__).info(
+                    "backtest reconcile sport=%s %d/%d", sport, i, total,
+                )
+
         return forecasts_to_matchup_table(forecasts)
 
     def get_review_table(self, sport: Sport, *, final_only: bool = True) -> pd.DataFrame:

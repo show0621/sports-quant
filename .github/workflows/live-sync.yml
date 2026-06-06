@@ -1,0 +1,32 @@
+name: Live Odds Sync
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"  # 每 15 分鐘
+  workflow_dispatch:
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Live sync NBA + MLB
+        run: |
+          python main.py sync --mode live --sport nba
+          python main.py sync --mode live --sport mlb
+
+      - name: Commit database
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/sportsbet.db || true
+          git diff --staged --quiet || git commit -m "chore(data): live odds sync"
+          git push

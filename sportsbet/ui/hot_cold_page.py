@@ -1,20 +1,24 @@
 """球員狀態熱區圖分頁。"""
 from __future__ import annotations
 
-import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from sportsbet.data.data_quality import has_real_player_stats
 from sportsbet.data.database import SportsDatabase
 
 
 def page_player_hot_cold(db: SportsDatabase, sport: str) -> None:
     st.header("球員狀態熱區 (Hot / Cold)")
-    st.caption("近 10 場滾動表現 vs 賽季平均；|指數| 越大代表偏離越明顯")
+    st.caption("近 10 場滾動表現 vs 賽季平均（nba_api / ESPN 真實數據）")
+
+    if not has_real_player_stats(db, sport):  # type: ignore[arg-type]
+        st.warning("尚無球員滾動統計。請執行 `python main.py sync --mode players --sport " + sport + "`。")
+        return
 
     df = db.get_player_hot_cold(sport, limit=80)
     if df.empty:
-        st.warning("尚無球員高階數據，請先同步 V2 球員資料。")
+        st.warning("資料庫中尚無 hot/cold 指標。")
         return
 
     hot = df[df["hot_cold_index"] > 0.08].head(15)

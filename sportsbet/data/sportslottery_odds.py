@@ -17,16 +17,28 @@ class SportLotteryOddsMixin:
 
     db: SportsDatabase
 
-    def fetch_odds(self, sport: SportLit, match_date: str | None = None) -> pd.DataFrame:
+    def fetch_odds(
+        self,
+        sport: SportLit,
+        match_date: str | None = None,
+        *,
+        replace: bool = False,
+    ) -> pd.DataFrame:
         from datetime import date
 
         d = match_date or date.today().isoformat()
-        rows = self._fetch_sportslottery_odds(sport, d)
+        rows = self._fetch_sportslottery_odds(sport, d, replace=replace)
         if rows.empty:
             logger.warning("運彩 Blob 無 %s 賠率（%s）", sport, d)
         return rows
 
-    def _fetch_sportslottery_odds(self, sport: SportLit, match_date: str) -> pd.DataFrame:
+    def _fetch_sportslottery_odds(
+        self,
+        sport: SportLit,
+        match_date: str,
+        *,
+        replace: bool = False,
+    ) -> pd.DataFrame:
         from sportsbet.data.sportslottery import SportLotteryClient
         from sportsbet.data.team_names import normalize_matchup
 
@@ -51,6 +63,9 @@ class SportLotteryOddsMixin:
         games = self.db.get_games(sport, match_date)
         if games.empty:
             return pd.DataFrame()
+
+        if replace:
+            self.db.clear_odds_for_date(sport, match_date)  # type: ignore[arg-type]
 
         inserted = []
         for _, o in odds_df.iterrows():

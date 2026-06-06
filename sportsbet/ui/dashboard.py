@@ -20,15 +20,16 @@ if str(ROOT) not in sys.path:
 
 from sportsbet import config  # noqa: E402
 from sportsbet.data.database import SportsDatabase  # noqa: E402
-from sportsbet.data.player_ingestion import sync_v2_player_data  # noqa: E402
-from sportsbet.data.provider import api_key_configured, describe_data_source, get_data_provider  # noqa: E402
+from sportsbet.data.db_github_sync import push_database_to_github  # noqa: E402
+from sportsbet.data.data_quality import data_quality_summary  # noqa: E402
+from sportsbet.data.orchestrator import DataOrchestrator  # noqa: E402
+from sportsbet.data.provider import api_key_configured, describe_data_source  # noqa: E402
 from sportsbet.evaluation.evaluator import EvaluationModule  # noqa: E402
 from sportsbet.models.analytics_engine import AnalyticsEngine  # noqa: E402
-from sportsbet.models.forecast import team_detail_dataframe  # noqa: E402
 from sportsbet.risk.ev import RiskManager  # noqa: E402
-from sportsbet.data.db_github_sync import push_database_to_github  # noqa: E402
-from sportsbet.services.data_refresh import run_full_backtest_refresh  # noqa: E402
+from sportsbet.services.data_refresh import run_full_backtest_refresh, run_incremental_backtest_refresh  # noqa: E402
 from sportsbet.services.prediction_service import PredictionService  # noqa: E402
+from sportsbet.ui.live_monitor_page import page_live_monitor  # noqa: E402
 from sportsbet.ui.hot_cold_page import page_player_hot_cold  # noqa: E402
 from sportsbet.ui.injury_ticker import render_injury_ticker  # noqa: E402
 from sportsbet.ui.upcoming_page import page_current_future_predictions  # noqa: E402
@@ -61,59 +62,12 @@ def _persist_database(message: str | None = None) -> None:
 
 
 def ensure_data(sport: str) -> None:
+    """看板載入：只讀 DB，不在此觸發重型同步（由 watch / CLI 負責）。"""
     db = get_db()
-    provider = get_data_provider(db)
-    season = None
-    from sportsbet.data.api_sports import calendar_season
-
-    season = calendar_season(sport)  # type: ignore[arg-type]
-
-    if db.get_team_stats(sport).empty:
-        provider.fetch_historical_stats(sport, season)
-    from datetime import timedelta
-
-    today = date.today().isoformat()
-    for offset in range(7):
-        d = (date.today() + timedelta(days=offset)).isoformat()
-        games_d = db.get_games(sport, d)
-        need_schedule = (
-            games_d.empty
-            or games_d["home_score"].isna().any()
-            or games_d["away_score"].isna().any()
+    if db.get_team_stats(sport).empty and db.get_games(sport, date.today().isoformat()).empty:
+        st.sidebar.warning(
+            "資料庫為空。請先執行：`python main.py watch --sport all` 或 `python main.py sync --mode daily --sport all`"
         )
-        if need_schedule:
-            provider.fetch_daily_schedule(sport, d)
-
-        # odds 可能會在「有賽程但尚未抓到」的狀況出現缺口；這裡確保補齊
-        if db.count_odds_for_date(sport, d) == 0:
-            provider.fetch_odds(sport, d)
-    svc = get_prediction_service()
-    inj_df = db.get_injuries(sport)
-    if inj_df.empty:
-        sync_v2_player_data(db, sport)
-
-    # 必須在傷兵資料就緒後再跑 upcoming，讓 forecast 反映 injury_penalty
-    svc.run_upcoming(sport, days_ahead=7)
-
-    if db.get_forecast_review(sport, final_only=True).empty:
-        run_full_backtest_refresh(
-            db,
-            sport,
-            sync_api=True,
-            sync_injuries=False,
-        )
-    else:
-        missing_forecasts = db.count_scored_games_missing_forecast(sport)
-        missing_predictions = db.count_scored_games_missing_predictions(sport)
-        if missing_forecasts > 0 or missing_predictions > 0:
-            run_full_backtest_refresh(
-                db,
-                sport,
-                sync_api=False,
-                sync_injuries=False,
-            )
-
-    _persist_database(f"chore(data): auto sync {sport} after load")
 
 
 def build_daily_predictions(sport: str) -> pd.DataFrame:
@@ -180,17 +134,15 @@ def page_backtest_review(sport: str) -> None:
     st.header("回測覆盤（歷史賽事）")
     st.caption(
         f"預設回測區間：過去 {config.BACKTEST_YEARS} 年（{config.BACKTEST_DAYS} 天）。"
+        f"已結束賽事覆盤會寫入資料庫；之後只補最近 {config.BACKTEST_INCREMENTAL_LOOKBACK_DAYS} 天與缺漏日期。"
         "現在/未來預測請至「賽事預測」分頁。"
     )
 
     svc = get_prediction_service()
+    db = get_db()
     if st.button("重新產生全部覆盤紀錄", type="primary"):
         with st.spinner("同步歷史賽果、傷兵並重算全部覆盤…"):
-            stats = run_full_backtest_refresh(
-                get_db(), sport,
-                sync_api=True,
-                sync_injuries=True,
-            )
+            stats = run_full_backtest_refresh(db, sport, sync_api=True, sync_injuries=True)
             _persist_database(f"chore(data): full backtest refresh {sport}")
         st.success(
             f"覆盤已更新：{stats.get('forecasts', 0)} 場預測、"
@@ -317,14 +269,51 @@ def page_daily_picks(sport: str) -> None:
 
 def page_model_health(sport: str) -> None:
     st.header("模型健康度 (Model Health)")
+    st.caption("集成模型：Log5 + 貝氏 + Beta-Binomial + 馬可夫近況 + 休息/B2B/H2H 情境")
     db = get_db()
     df = db.get_backtest_frame(sport)
     if df.empty:
-        st.warning("尚無歷史預測與賽果，請先同步 API 歷史資料。")
+        st.warning("尚無歷史預測與賽果，請先執行 `python main.py sync --mode backtest --sport nba`。")
         return
 
+    from sportsbet.evaluation.ev_report import build_ev_backtest_report
+
+    df_ml = df[df["market"] == "moneyline"] if "market" in df.columns else df
+    if df_ml.empty:
+        st.warning("尚無 moneyline 賠率，請執行 backtest sync 或設定 JBOT_TOKEN。")
+        return
+
+    ev_rep = build_ev_backtest_report(df_ml)
+    st.subheader("期望值回測（EV Validation）")
+    st.write(ev_rep.summary_text)
+
+    e1, e2, e3, e4, e5 = st.columns(5)
+    e1.metric("正 EV 筆數", ev_rep.n_positive_ev)
+    e2.metric("正 EV ROI", f"{ev_rep.roi_taken:+.2%}")
+    e3.metric("平均 EV（正EV）", f"{ev_rep.avg_ev_taken:+.2%}")
+    e4.metric("邊際 p-value", f"{ev_rep.p_value_edge:.3f}")
+    e5.metric("Profit Factor", f"{ev_rep.profit_factor:.2f}" if ev_rep.profit_factor < 100 else "∞")
+
+    verdict_cols = st.columns(3)
+    verdict_cols[0].success("EV 門檻 ✓" if ev_rep.pass_ev_threshold else "EV 門檻 ✗")
+    verdict_cols[1].success("校準 ✓" if ev_rep.pass_calibration else "校準 ✗")
+    verdict_cols[2].success("ROI ✓" if ev_rep.pass_roi else "ROI ✗")
+
+    if not ev_rep.by_odds_bucket.empty:
+        st.subheader("依賠率區間")
+        st.dataframe(
+            ev_rep.by_odds_bucket.assign(
+                win_rate=lambda x: (x["win_rate"] * 100).round(1).astype(str) + "%",
+                avg_prob=lambda x: (x["avg_prob"] * 100).round(1).astype(str) + "%",
+                avg_ev=lambda x: (x["avg_ev"] * 100).round(2).astype(str) + "%",
+                roi=lambda x: (x["roi"] * 100).round(2).astype(str) + "%",
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+
     evaluator = EvaluationModule()
-    report = evaluator.run_full_evaluation(df)
+    report = evaluator.run_full_evaluation(df_ml)
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Brier Score", f"{report.brier_score:.4f}", help="越低越好，0 為完美校準")
@@ -429,6 +418,16 @@ def main() -> None:
         st.sidebar.error(full)
 
     st.sidebar.caption(describe_data_source(sport))
+    quality = data_quality_summary(get_db(), sport)  # type: ignore[arg-type]
+    q_labels = {
+        "team_stats": "球隊統計",
+        "historical_games": "歷史賽果",
+        "tw_odds": "台灣盤口",
+        "injuries": "傷兵",
+        "player_rolling": "球員滾動",
+    }
+    for key, label in q_labels.items():
+        st.sidebar.caption(f"{'✅' if quality.get(key) else '⬜'} {label}")
     if api_key_configured():
         st.sidebar.success("API-Sports 金鑰已設定（作為備援）")
     else:
@@ -443,44 +442,39 @@ def main() -> None:
             f"當季 {calendar_season(sport)} 改由 nba_api/ESPN。"
         )
 
-    if st.sidebar.button("同步資料（賽程 + 賠率 + 覆盤）", type="primary"):
+    if st.sidebar.button("完整同步（賽程+覆盤）", type="secondary"):
         try:
             db = get_db()
-            provider = get_data_provider(db)
-            season = calendar_season(sport)  # type: ignore[arg-type]
-            with st.spinner("同步中（nba_api/ESPN/運彩 Blob）…"):
-                provider.fetch_historical_stats(sport, season)
-                for offset in range(7):
-                    d = (date.today() + timedelta(days=offset)).isoformat()
-                    provider.fetch_daily_schedule(sport, d)
-                    provider.fetch_odds(sport, d)
-            svc_pred = get_prediction_service()
-            svc_pred.run_upcoming(sport, days_ahead=7)
-            run_full_backtest_refresh(db, sport, sync_api=True, sync_injuries=True)
-            _persist_database(f"chore(data): hybrid sync {sport}")
+            orch = DataOrchestrator(db)
+            with st.spinner("完整同步中…"):
+                orch.sync_daily(sport, days_ahead=7, force_players=True)  # type: ignore[arg-type]
+                run_incremental_backtest_refresh(db, sport, sync_api=False, sync_injuries=False)
+            _persist_database(f"chore(data): full sync {sport}")
             st.session_state["last_api_error"] = ""
-            st.sidebar.success("同步完成（含傷兵與覆盤）")
+            st.sidebar.success("完整同步完成")
             st.cache_resource.clear()
             st.rerun()
         except Exception as exc:
             _show_sidebar_api_error(exc)
 
+    last_live = get_db().get_backtest_sync_meta(sport, "live_synced_at")
+    if last_live:
+        st.sidebar.caption(f"🟢 Live · {last_live[:16]}")
+    else:
+        st.sidebar.caption("⚪ 尚未 live 同步 · 請執行 watch")
+
     try:
         ensure_data(sport)
-        if st.session_state.get("last_api_error"):
-            st.session_state["last_api_error"] = ""
     except Exception as exc:
         _show_sidebar_api_error(exc, prefix="資料載入失敗")
-        st.stop()
-
-    if st.session_state.get("last_api_error"):
-        st.sidebar.error(st.session_state["last_api_error"])
 
     render_injury_ticker(get_db(), sport)
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
-        ["賽事預測", "回測覆盤", "球員熱區", "投注訊號", "模型健康度", "資金回測"]
+    tab0, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+        ["即時監控", "賽事預測", "回測覆盤", "球員熱區", "投注訊號", "模型健康度", "資金回測"]
     )
+    with tab0:
+        page_live_monitor(get_db(), sport, get_prediction_service())
     with tab1:
         page_current_future_predictions(sport, get_prediction_service())
     with tab2:

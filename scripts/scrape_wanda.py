@@ -1,4 +1,6 @@
-"""抓取威剛賠率。用法: python scripts/scrape_wanda.py --sample"""
+"""抓取運彩賠率（Blob / JBot）。用法: python scripts/scrape_wanda.py --sport nba"""
+from __future__ import annotations
+
 import argparse
 import sys
 from pathlib import Path
@@ -12,16 +14,17 @@ from sportsbet.data.storage import save_odds
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--sport", default="nba")
-    p.add_argument("--path", default="")
-    p.add_argument("--sample", action="store_true")
+    p.add_argument("--sport", default="nba", choices=["nba", "mlb"])
+    p.add_argument("--jbot", action="store_true", help="一併抓取 JBot 歷史")
+    p.add_argument("--days-back", type=int, default=7)
     args = p.parse_args()
     scraper = WandaScraper()
-    if args.sample:
-        df = scraper.load_sample_format()
-        save_odds(df)
-    else:
-        df = scraper.scrape_and_save(args.path, args.sport)
+    df = scraper.scrape_and_save(
+        args.sport,  # type: ignore[arg-type]
+        use_jbot=args.jbot,
+        days_back=args.days_back,
+    )
+    save_odds(df)
     print(f"完成 {len(df)} 筆")
 
 
