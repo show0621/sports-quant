@@ -253,7 +253,7 @@ class PredictionService:
         for f in forecasts:
             d_str, t_str = format_match_datetime(f.match_datetime, f.match_date)
             tw_date = taipei_match_date(f.match_datetime, f.match_date)
-            tag = f.competition_note or f.season_type or ""
+            tag = forecast_event_label(f)
             h_en, h_zh = team_bilingual(f.home_team, f.sport)
             a_en, a_zh = team_bilingual(f.away_team, f.sport)
             odds = summarize_game_odds(self.db, f.game_id)

@@ -117,6 +117,12 @@ class GameForecast:
         return row
 
 
+def forecast_event_label(fc: GameForecast | object) -> str:
+    """賽事性質標籤（季後賽 / 總冠軍賽等）；相容舊版物件缺欄位。"""
+    note = getattr(fc, "competition_note", None) or getattr(fc, "season_type", None) or ""
+    return str(note).strip() if note else ""
+
+
 def _team_detail(
     team: str,
     rs: float,

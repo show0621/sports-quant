@@ -7,16 +7,16 @@ import pandas as pd
 import streamlit as st
 
 from sportsbet.data.team_names import team_bilingual
-from sportsbet.models.forecast import team_detail_dataframe
+from sportsbet.models.forecast import GameForecast, forecast_event_label, team_detail_dataframe
 from sportsbet.services.prediction_service import PredictionService
 from sportsbet.ui.matchup_display import format_match_datetime, render_matchup_header, taipei_match_date
 from sportsbet.ui.odds_display import render_odds_panel
 
 
 def _render_injury_impact(fc, side: str) -> None:
-    missing = fc.home_missing if side == "home" else fc.away_missing
-    penalty = fc.home_injury_penalty if side == "home" else fc.away_injury_penalty
-    adj = fc.home_adjusted_rating if side == "home" else fc.away_adjusted_rating
+    missing = getattr(fc, f"{side}_missing", None) or []
+    penalty = getattr(fc, f"{side}_injury_penalty", None)
+    adj = getattr(fc, f"{side}_adjusted_rating", None)
     if not missing and not penalty:
         return
     st.markdown(f"**{side.upper()} 傷兵調整**")
@@ -36,16 +36,22 @@ def _pct(v: float | None) -> str:
 def _status_sort_key(fc) -> tuple[int, str]:
     order = {"in_progress": 0, "scheduled": 1, "final": 2}
     st_val = str(getattr(fc, "status", "") or "scheduled").lower()
-    return order.get(st_val, 3), fc.match_datetime or fc.match_date
+    md = getattr(fc, "match_datetime", None) or getattr(fc, "match_date", "")
+    return order.get(st_val, 3), str(md)
 
 
 def _card_title(fc, sport: str) -> str:
-    d_str, t_str = format_match_datetime(fc.match_datetime, fc.match_date)
-    h_en, h_zh = team_bilingual(fc.home_team, sport)
-    a_en, a_zh = team_bilingual(fc.away_team, sport)
+    d_str, t_str = format_match_datetime(
+        getattr(fc, "match_datetime", None),
+        str(getattr(fc, "match_date", "")),
+    )
+    home = getattr(fc, "home_team", "?")
+    away = getattr(fc, "away_team", "?")
+    h_en, h_zh = team_bilingual(home, sport)
+    a_en, a_zh = team_bilingual(away, sport)
     h_show = f"{h_en} / {h_zh}" if h_zh else h_en
     a_show = f"{a_en} / {a_zh}" if a_zh else a_en
-    label = fc.competition_note or fc.season_type or ""
+    label = forecast_event_label(fc)
     title_extra = f" · {label}" if label else ""
     status = str(getattr(fc, "status", "") or "").lower()
     status_tag = ""
@@ -53,9 +59,10 @@ def _card_title(fc, sport: str) -> str:
         status_tag = " · 已完賽"
     elif status == "in_progress":
         status_tag = " · LIVE"
+    winner = getattr(fc, "predicted_winner", "—")
     return (
         f"{d_str} {t_str} · {h_show} vs {a_show}{title_extra}{status_tag} · "
-        f"預測：{fc.predicted_winner}"
+        f"預測：{winner}"
     )
 
 
@@ -66,12 +73,15 @@ def _render_forecast_card(
     *,
     expanded: bool = False,
 ) -> None:
+    if not isinstance(fc, GameForecast):
+        st.warning(f"略過無效預測物件：{type(fc).__name__}")
+        return
     with st.expander(_card_title(fc, sport), expanded=expanded):
         render_matchup_header(
             fc,
             sport=sport,
-            home_logo_db=fc.home_logo_url,
-            away_logo_db=fc.away_logo_url,
+            home_logo_db=getattr(fc, "home_logo_url", None),
+            away_logo_db=getattr(fc, "away_logo_url", None),
         )
         render_odds_panel(svc.db, fc, sport)
 
@@ -134,7 +144,7 @@ def page_current_future_predictions(sport: str, svc: PredictionService) -> None:
             st.success("已更新預測紀錄")
             st.rerun()
 
-    forecasts = svc.run_upcoming(sport, days_ahead=days_ahead)
+    forecasts = [f for f in svc.run_upcoming(sport, days_ahead=days_ahead) if isinstance(f, GameForecast)]
     today = date.today().isoformat()
 
     if not forecasts:
@@ -156,12 +166,15 @@ def page_current_future_predictions(sport: str, svc: PredictionService) -> None:
         return
 
     today_fc = sorted(
-        [f for f in forecasts if taipei_match_date(f.match_datetime, f.match_date) == today],
+        [
+            f for f in forecasts
+            if taipei_match_date(getattr(f, "match_datetime", None), str(getattr(f, "match_date", ""))) == today
+        ],
         key=_status_sort_key,
     )
     future_fc = [
         f for f in forecasts
-        if taipei_match_date(f.match_datetime, f.match_date) > today
+        if taipei_match_date(getattr(f, "match_datetime", None), str(getattr(f, "match_date", ""))) > today
     ]
 
     finals_n = sum(1 for f in today_fc if str(getattr(f, "status", "")).lower() == "final")
