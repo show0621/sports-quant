@@ -18,7 +18,6 @@ import requests
 from bs4 import BeautifulSoup
 
 from sportsbet import config
-from sportsbet import config
 from sportsbet.data.database import SportsDatabase
 from sportsbet.data.team_logos import espn_logo_url
 from sportsbet.data.team_names import normalize_matchup, normalize_team_name
@@ -257,10 +256,6 @@ class PlaySportScraper:
                 line = float(row["total_line"])
                 db.insert_odds(gid, "total", "over", 1.75, handicap=line, bookmaker="playsport")
                 db.insert_odds(gid, "total", "under", 1.75, handicap=line, bookmaker="playsport")
-            # 台灣運彩不讓分制（玩運彩頁面未列 moneyline，回測用標準 1.75）
-            ml = config.TW_MONEYLINE_ODDS
-            db.insert_odds(gid, "moneyline", "home", ml, bookmaker="tw_standard")
-            db.insert_odds(gid, "moneyline", "away", ml, bookmaker="tw_standard")
 
         logger.info("playsport teamid=%s 寫入 %d 場", team_id, len(df))
         return df

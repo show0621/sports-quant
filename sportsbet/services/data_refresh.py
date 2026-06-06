@@ -42,7 +42,11 @@ def prepare_backtest_odds(
     from sportsbet.data.moneyline_backfill import backfill_tw_moneyline_odds
 
     out["jbot_odds"] = sync_jbot_odds_to_db(db, sport, incremental=incremental)
-    out["moneyline_backfill"] = backfill_tw_moneyline_odds(db, sport)
+    out["moneyline_backfill"] = (
+        backfill_tw_moneyline_odds(db, sport)
+        if config.ALLOW_TW_MONEYLINE_BACKFILL
+        else 0
+    )
     return out
 
 

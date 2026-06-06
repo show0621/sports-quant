@@ -45,7 +45,7 @@ Log5 + 貝氏 + Beta-Binomial + 馬可夫 Hot/Cold + 情境修正 → `probabili
 
 - **賽前 stats**：`point_in_time_stats.py` + `run_backtest_reconcile`（禁止全季 stats 前視）
 - **回測不套用傷兵修正**（`use_roster=False`）
-- **moneyline**：JBot 歷史盤 → 缺漏補 `TW_MONEYLINE_ODDS=1.75`
+- **moneyline**：JBot 歷史盤 → 預設**不**補合成 1.75（`ALLOW_TW_MONEYLINE_BACKFILL=false`）
 - **占位 final 清理**：`cleanup_placeholder_final_games()`
 
 ## CLI

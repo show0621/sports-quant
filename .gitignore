@@ -10,3 +10,4 @@ data/**/*.csv
 data/**/*.db
 !data/sportsbet.db
 !data/.gitkeep
+data/playsport_row.html

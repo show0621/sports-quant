@@ -5,7 +5,7 @@ from typing import Literal
 
 Sport = Literal["nba", "mlb"]
 
-# Mock 短隊名 → 標準全名
+# 短隊名 / 別名 → 標準全名
 NBA_ALIASES: dict[str, str] = {
     "Lakers": "Los Angeles Lakers",
     "Celtics": "Boston Celtics",
@@ -112,7 +112,7 @@ def canonical_team_name(team: str, sport: Sport) -> str:
 
 def resolve_team_in_database(db, sport: Sport, candidate: str) -> str:
     """
-    將 ESPN / API-Sports / MOCK 隊名對齊至資料庫既有寫法。
+    將 ESPN / API-Sports 隊名對齊至資料庫既有寫法。
     若 DB 尚無該隊，回傳 canonical 全名供新資料寫入。
     """
     from sportsbet.data.database import SportsDatabase
