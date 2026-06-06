@@ -161,6 +161,57 @@ class PredictionService:
         out["預測正確"] = out["pick_correct"].map({1: "✓", 0: "✗", None: "—"})
         return out
 
+    def _refresh_team_stats(self, sport: Sport) -> None:
+        """依 DB 已完賽結果更新 team_stats（含近況勝率）。"""
+        from sportsbet.data.api_sports import calendar_season
+        from sportsbet.data.team_stats import build_team_stats_from_games, persist_team_stats
+
+        games = self.db.get_games(sport, with_scores_only=True)
+        if games.empty:
+            return
+        stats = build_team_stats_from_games(games, sport)
+        if not stats.empty:
+            persist_team_stats(self.db, sport, stats, season=calendar_season(sport))
+
+    def ensure_schedule_sync(self, sport: Sport, *, days_ahead: int) -> int:
+        """向 ESPN 補抓今日起 N 天賽程（若該日尚無賽事）。"""
+        from sportsbet.data.espn_schedule import EspnScheduleClient
+
+        today = date.today()
+        client = EspnScheduleClient()
+        synced = 0
+        for offset in range(days_ahead + 1):
+            d = (today + timedelta(days=offset)).isoformat()
+            existing = self.db.get_games(sport, d)
+            if not existing.empty:
+                continue
+            df = client.sync_date_to_database(self.db, sport, d)
+            synced += len(df)
+        return synced
+
+    def _stats_for_game(
+        self,
+        sport: Sport,
+        g: pd.Series,
+        builder: PointInTimeStatsBuilder,
+        fallback: pd.DataFrame,
+    ) -> pd.DataFrame:
+        """依開賽日取賽前 stats（含該日前所有完賽，如前一場 G2 結果）。"""
+        from sportsbet.ui.matchup_display import taipei_match_date
+
+        tw = taipei_match_date(
+            str(g["match_datetime"]) if pd.notna(g.get("match_datetime")) else None,
+            str(g["match_date"])[:10],
+        )
+        as_of = (date.fromisoformat(tw) + timedelta(days=1)).isoformat()
+        stats = builder.snapshot_before(as_of)
+        if stats.empty or g["home_team"] not in stats.index or g["away_team"] not in stats.index:
+            if not fallback.empty:
+                return fallback
+            self._refresh_team_stats(sport)
+            return self.db.get_team_stats(sport).set_index("team")
+        return stats
+
     def _collect_dashboard_games(self, sport: Sport, *, days_ahead: int) -> pd.DataFrame:
         """今日（台灣）至未來區間的所有賽事，含今日已完賽。"""
         from sportsbet.ui.matchup_display import taipei_match_date
@@ -196,10 +247,14 @@ class PredictionService:
         """對現在/未來賽事產生預測；今日（台灣）含已完賽，作為當日儀表板。"""
         from sportsbet.ui.matchup_display import taipei_match_date
 
+        self._refresh_team_stats(sport)
         games = self._collect_dashboard_games(sport, days_ahead=days_ahead)
         if games.empty:
             return []
-        stats = self.db.get_team_stats(sport).set_index("team")
+
+        games = games.sort_values(["match_date", "match_datetime", "id"], na_position="last")
+        fallback = self.db.get_team_stats(sport).set_index("team")
+        builder = PointInTimeStatsBuilder.from_db(self.db, sport)
         today_str = date.today().isoformat()
         forecasts: list[GameForecast] = []
         for _, g in games.drop_duplicates(subset=["id"]).iterrows():
@@ -210,6 +265,7 @@ class PredictionService:
                 continue
             if not team_belongs_to_sport(ht, sport) or not team_belongs_to_sport(at, sport):
                 continue
+            stats = self._stats_for_game(sport, g, builder, fallback)
             d = str(g["match_date"])[:10]
             gid = int(g["id"])
             line = self.db.get_market_line(gid, "total")
@@ -219,7 +275,7 @@ class PredictionService:
                     totals = board[(board["game_id"] == gid) & (board["market"] == "total")]
                     if not totals.empty and pd.notna(totals.iloc[0].get("handicap")):
                         line = float(totals.iloc[0]["handicap"])
-            fc = self.forecast_game_row(sport, g, stats, total_line=line)
+            fc = self.forecast_game_row(sport, g, stats, total_line=line, use_roster=True)
             if not fc:
                 continue
             tw = taipei_match_date(fc.match_datetime, fc.match_date)

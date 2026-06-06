@@ -644,7 +644,7 @@ def main() -> None:
             db = get_db()
             orch = DataOrchestrator(db)
             with st.spinner("完整同步中…（完成後推送 GitHub DB）"):
-                orch.sync_daily(sport, days_ahead=14, force_players=True)  # type: ignore[arg-type]
+                orch.sync_daily(sport, force_players=True)  # type: ignore[arg-type]
                 run_incremental_backtest_refresh(db, sport, sync_api=False, sync_injuries=False)
             push = _persist_database(f"chore(data): full sync {sport}", db=db)
             _show_db_push_result(push)

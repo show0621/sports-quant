@@ -128,21 +128,31 @@ def _render_forecast_card(
 
 
 def page_current_future_predictions(sport: str, svc: PredictionService) -> None:
+    from sportsbet import config
+
     st.header("賽事預測（現在 / 未來）")
     st.caption(
         "以台灣時間顯示 · 今日儀表板含進行中、未開賽與已完賽 · "
-        "中英文隊名並列 · 盤口：大小分、讓分、勝負賠率"
+        "中英文隊名並列 · 盤口：大小分、讓分、勝負賠率 · "
+        "預測納入每場開賽前已完賽結果、近況勝率、傷兵與陣容評估"
     )
 
+    max_days = config.SCHEDULE_SYNC_DAYS_AHEAD
     col_a, col_b, col_c = st.columns([1, 1, 2])
     with col_a:
-        days_ahead = st.selectbox("未來天數", [3, 7, 14], index=1)
+        days_ahead = st.selectbox("未來天數", [7, 14, 21], index=2)
     with col_b:
-        if st.button("重新計算並儲存預測", type="primary"):
-            with st.spinner("計算中…"):
-                svc.run_upcoming(sport, days_ahead=days_ahead)
-            st.success("已更新預測紀錄")
-            st.rerun()
+        sync_btn = st.button("同步賽程並重算", type="secondary")
+        recalc_btn = st.button("重新計算並儲存預測", type="primary")
+    if sync_btn:
+        with st.spinner("向 ESPN 補抓賽程…"):
+            n = svc.ensure_schedule_sync(sport, days_ahead=max(days_ahead, max_days))
+        st.caption(f"新增 {n} 場賽程")
+    if recalc_btn or sync_btn:
+        with st.spinner("計算中…"):
+            svc.run_upcoming(sport, days_ahead=days_ahead)
+        st.success("已更新預測紀錄")
+        st.rerun()
 
     forecasts = [f for f in svc.run_upcoming(sport, days_ahead=days_ahead) if isinstance(f, GameForecast)]
     today = date.today().isoformat()
@@ -211,8 +221,12 @@ def page_current_future_predictions(sport: str, svc: PredictionService) -> None:
 
     with sub_future:
         if not future_fc:
-            st.info("未來區間無賽事。")
+            st.info("未來區間無賽事。請按「同步賽程並重算」或側欄「完整同步」。")
         else:
+            st.caption(
+                "若 [Bing 賽程](https://www.bing.com/sportsdetails?q=nba%20%E8%B3%BD%E4%BA%8B&sport=Basketball&league=Basketball_NBA&intent=Schedule) "
+                "有 TBA 場次（如 G6/G7）但此處未顯示，代表 ESPN 尚未公布該日 scoreboard，公布後再同步即可。"
+            )
             by_date: dict[str, list] = {}
             for fc in future_fc:
                 d = taipei_match_date(fc.match_datetime, fc.match_date)

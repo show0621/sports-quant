@@ -44,7 +44,8 @@ PLAYSPORT_MAX_TEAMS_PER_SYNC = int(os.getenv("PLAYSPORT_MAX_TEAMS_PER_SYNC", "30
 # --- 即時同步 / 看板 ---
 LIVE_SYNC_INTERVAL_SEC = int(os.getenv("LIVE_SYNC_INTERVAL_SEC", "180"))  # watch 背景每 3 分鐘
 DASHBOARD_AUTOREFRESH_SEC = int(os.getenv("DASHBOARD_AUTOREFRESH_SEC", "120"))  # 看板每 2 分鐘刷新
-LIVE_SYNC_DAYS_AHEAD = int(os.getenv("LIVE_SYNC_DAYS_AHEAD", "3"))  # live 只抓近 3 天
+LIVE_SYNC_DAYS_AHEAD = int(os.getenv("LIVE_SYNC_DAYS_AHEAD", "21"))  # 含季後賽/總冠軍賽完整排程
+SCHEDULE_SYNC_DAYS_AHEAD = int(os.getenv("SCHEDULE_SYNC_DAYS_AHEAD", "21"))
 
 # --- 賽事帳本（從指定日起累積每場賽前/賽後快照；起始日首次同步後寫入 DB 不再變更）---
 GAME_LEDGER_ENABLED = os.getenv("GAME_LEDGER_ENABLED", "true").lower() == "true"

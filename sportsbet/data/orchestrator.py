@@ -125,8 +125,9 @@ class DataOrchestrator:
         self.db.set_backtest_sync_meta(sport, "players_synced_at", today)
         return out
 
-    def sync_daily(self, sport: Sport, *, days_ahead: int = 7, force_players: bool = False) -> dict[str, int]:
+    def sync_daily(self, sport: Sport, *, days_ahead: int | None = None, force_players: bool = False) -> dict[str, int]:
         """每日管線：賽程 + 盤口 + 球員 + 預測 + 歷史累積。"""
+        days = days_ahead if days_ahead is not None else config.SCHEDULE_SYNC_DAYS_AHEAD
         out: dict[str, int] = {}
         season = calendar_season(sport)
         incremental = self.db.is_backtest_cache_warm(sport)
@@ -139,22 +140,22 @@ class DataOrchestrator:
             self.provider.fetch_historical_stats(sport, season, incremental=incremental)
 
         today = date.today()
-        for offset in range(days_ahead + 1):
+        for offset in range(days + 1):
             d = (today + timedelta(days=offset)).isoformat()
             self.provider.fetch_daily_schedule(sport, d)
 
         out["ledger_pre"] = capture_ledger_pre(self.db, sport)
 
-        for offset in range(days_ahead + 1):
+        for offset in range(days + 1):
             d = (today + timedelta(days=offset)).isoformat()
             self.provider.fetch_odds(sport, d, replace=False)
 
         out["players"] = sum(
-            self.sync_players(sport, days_lineup=days_ahead, force=force_players).values()
+            self.sync_players(sport, days_lineup=days, force=force_players).values()
         )
 
         svc = PredictionService(self.db)
-        forecasts = svc.run_upcoming(sport, days_ahead=days_ahead)
+        forecasts = svc.run_upcoming(sport, days_ahead=days)
         out["forecasts"] = len(forecasts)
 
         acc = accumulate_after_sync(self.db, sport)
