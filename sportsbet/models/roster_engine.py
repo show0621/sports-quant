@@ -43,6 +43,7 @@ class RosterRatingResult:
     adjusted_rating: float
     injury_penalty: float
     active_count: int
+    data_ready: bool = False
     excluded_players: list[MissingPlayerImpact] = field(default_factory=list)
     discounted_players: list[MissingPlayerImpact] = field(default_factory=list)
 
@@ -94,24 +95,28 @@ class DynamicRosterRatingEngine:
             return RosterRatingResult(
                 sport=sport, team=team, match_date=match_date,
                 baseline_rating=0.0, adjusted_rating=0.0, injury_penalty=0.0, active_count=0,
+                data_ready=False,
             )
 
         players = players.drop_duplicates(subset=["player_id"])
+        col = "vorp" if sport == "nba" else "war"
+        has_metrics = int(players[col].notna().sum()) >= 3
         if not lineup.empty:
             players = players.merge(
                 lineup[["player_id", "expected_minutes", "expected_innings", "is_starter"]],
                 on="player_id",
                 how="left",
             )
-        else:
+        elif has_metrics:
             players = players[
                 players["vorp"].notna() | players["war"].notna()
             ].head(8 if sport == "nba" else 9).copy()
-            if players.empty:
-                return RosterRatingResult(
-                    sport=sport, team=team, match_date=match_date,
-                    baseline_rating=0.0, adjusted_rating=0.0, injury_penalty=0.0, active_count=0,
-                )
+        else:
+            return RosterRatingResult(
+                sport=sport, team=team, match_date=match_date,
+                baseline_rating=0.0, adjusted_rating=0.0, injury_penalty=0.0, active_count=0,
+                data_ready=False,
+            )
 
         status_map = self._injury_status_map(sport, team, match_date)
 
@@ -166,7 +171,18 @@ class DynamicRosterRatingEngine:
                 )
 
         if baseline_rating <= 0:
-            baseline_rating = adjusted_rating or 1.0
+            return RosterRatingResult(
+                sport=sport,
+                team=team,
+                match_date=match_date,
+                baseline_rating=0.0,
+                adjusted_rating=0.0,
+                injury_penalty=0.0,
+                active_count=active_count,
+                data_ready=False,
+                excluded_players=excluded,
+                discounted_players=discounted,
+            )
 
         injury_penalty = max(0.0, baseline_rating - adjusted_rating)
         active_count = len(players) - len(excluded)
@@ -179,6 +195,7 @@ class DynamicRosterRatingEngine:
             adjusted_rating=adjusted_rating,
             injury_penalty=injury_penalty,
             active_count=active_count,
+            data_ready=True,
             excluded_players=excluded,
             discounted_players=discounted,
         )
@@ -224,6 +241,14 @@ class DynamicRosterRatingEngine:
         """單場雙隊陣容評估 + 混合勝率。"""
         home_rr = self.compute_team_rating(sport, home_team, match_date)
         away_rr = self.compute_team_rating(sport, away_team, match_date)
+        if not (home_rr.data_ready and away_rr.data_ready):
+            return {
+                "home": home_rr,
+                "away": away_rr,
+                "home_win_prob": home_topdown,
+                "away_win_prob": away_topdown,
+                "roster_applied": False,
+            }
         p_home, _ = self.blend_win_probability(
             sport, home_rr, away_rr, team_topdown_win_pct=home_topdown, home_advantage=config.BAYES_HOME_ADVANTAGE,
         )
@@ -236,4 +261,5 @@ class DynamicRosterRatingEngine:
             "away": away_rr,
             "home_win_prob": p_home / total,
             "away_win_prob": p_away / total,
+            "roster_applied": True,
         }

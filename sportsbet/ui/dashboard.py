@@ -198,6 +198,8 @@ def build_daily_predictions(sport: str) -> pd.DataFrame:
             stats = db.get_team_stats(sport).set_index("team")
             if ht not in stats.index or at not in stats.index:
                 continue
+            if pd.isna(g.get("odds")):
+                continue
             h, a = stats.loc[ht], stats.loc[at]
             engine = AnalyticsEngine(sport)  # type: ignore[arg-type]
             pred = engine.predict_matchup(
@@ -207,12 +209,14 @@ def build_daily_predictions(sport: str) -> pd.DataFrame:
             )
             if market == "moneyline":
                 prob = pred.home_win_prob if sel == "home" else pred.away_win_prob
-            else:
-                line = float(g["handicap"]) if pd.notna(g.get("handicap")) else 220.0
+            elif pd.notna(g.get("handicap")):
+                line = float(g["handicap"])
                 prob = engine.prob_total_over(line, pred.lambda_home, pred.lambda_away)
                 if sel == "under":
                     prob = 1.0 - prob
-        odds = float(g["odds"]) if pd.notna(g.get("odds")) else 1.75
+            else:
+                continue
+        odds = float(g["odds"])
         sig = risk.evaluate(prob, odds)
         rows.append(
             {

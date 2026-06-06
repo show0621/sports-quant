@@ -36,6 +36,38 @@ def roster_rating_enabled(db: SportsDatabase, sport: Sport) -> bool:
     return has_real_player_stats(db, sport)
 
 
+def team_has_player_metrics(db: SportsDatabase, sport: Sport, team: str) -> bool:
+    """該隊是否有真實球員進階數據（非虛構）。"""
+    players = db.get_players_by_team(sport, team)
+    if players.empty:
+        return False
+    col = "vorp" if sport == "nba" else "war"
+    if col not in players.columns:
+        return False
+    return int(players[col].notna().sum()) >= 3
+
+
+def matchup_injury_adjustment_ready(
+    db: SportsDatabase,
+    sport: Sport,
+    home_team: str,
+    away_team: str,
+    match_date: str,
+) -> bool:
+    """
+    是否允許套用傷兵/陣容勝率修正：
+    需近期傷兵已同步，且主客隊皆有真實球員 VORP/WAR。
+    """
+    if not roster_rating_enabled(db, sport):
+        return False
+    if not _injuries_synced_recently(db, sport):
+        return False
+    return (
+        team_has_player_metrics(db, sport, home_team)
+        and team_has_player_metrics(db, sport, away_team)
+    )
+
+
 def _injuries_synced_recently(db: SportsDatabase, sport: Sport) -> bool:
     """今日或昨日已成功跑過 ESPN 傷兵同步（即使 0 人受傷也算）。"""
     last = db.get_backtest_sync_meta(sport, "injuries_synced_at")

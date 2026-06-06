@@ -161,13 +161,16 @@ def _render_forecast_card(
         c4.metric("預估分差", f"{fc.predicted_margin:+.1f}")
 
         if fc.home_win_prob_base is not None and fc.away_win_prob_base is not None:
-            adj_h = fc.home_injury_adj or 0.0
-            adj_a = fc.away_injury_adj or 0.0
+            adj_h = fc.home_injury_adj
+            adj_a = fc.away_injury_adj
+            h_adj_txt = f"{adj_h:+.1%}" if adj_h is not None else "—"
+            a_adj_txt = f"{adj_a:+.1%}" if adj_a is not None else "—"
             st.caption(
-                f"傷兵修正：主隊 {_pct(fc.home_win_prob_base)} → {_pct(fc.home_win_prob)} "
-                f"({adj_h:+.1%})　｜　客隊 {_pct(fc.away_win_prob_base)} → {_pct(fc.away_win_prob)} "
-                f"({adj_a:+.1%})"
+                f"傷兵修正（僅真實資料）：主 {h_adj_txt} · 客 {a_adj_txt} · "
+                f"最終勝率（含 MC）主 {_pct(fc.home_win_prob)} · 客 {_pct(fc.away_win_prob)}"
             )
+            if adj_h is None and adj_a is None:
+                st.caption("尚未同步傷兵/球員 VORP，不顯示虛構修正值。")
 
         c5, c6, c7 = st.columns(3)
         c5.metric("大小盤口線" if sport == "mlb" else "大小分線", fc.total_line or "無開盤")

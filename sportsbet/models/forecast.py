@@ -307,6 +307,8 @@ def build_game_forecast(
 
     home_prob = home_prob_base
     away_prob = away_prob_base
+    home_prob_roster = away_prob_roster = None
+    roster_applied = False
 
     home_adj = away_adj = home_pen = away_pen = None
     home_base = away_base = None
@@ -314,30 +316,34 @@ def build_game_forecast(
     away_miss: list[dict[str, Any]] = []
 
     if db is not None and use_roster:
-        from sportsbet.data.data_quality import roster_rating_enabled
+        from sportsbet.data.data_quality import matchup_injury_adjustment_ready
 
-        if roster_rating_enabled(db, sport):
+        if matchup_injury_adjustment_ready(db, sport, home_team, away_team, match_date):
             from sportsbet.models.roster_engine import DynamicRosterRatingEngine
 
             rr = DynamicRosterRatingEngine(db).matchup_with_roster(
                 sport, home_team, away_team, match_date, home_prob, away_prob,
             )
-            home_prob = rr["home_win_prob"]
-            away_prob = rr["away_win_prob"]
-            home_adj = rr["home"].adjusted_rating
-            away_adj = rr["away"].adjusted_rating
-            home_base = rr["home"].baseline_rating
-            away_base = rr["away"].baseline_rating
-            home_pen = rr["home"].injury_penalty
-            away_pen = rr["away"].injury_penalty
-            home_miss = [
-                {"name": m.name, "status": m.status, "penalty": m.win_prob_penalty}
-                for m in rr["home"].excluded_players + rr["home"].discounted_players
-            ]
-            away_miss = [
-                {"name": m.name, "status": m.status, "penalty": m.win_prob_penalty}
-                for m in rr["away"].excluded_players + rr["away"].discounted_players
-            ]
+            if rr.get("roster_applied"):
+                roster_applied = True
+                home_prob_roster = rr["home_win_prob"]
+                away_prob_roster = rr["away_win_prob"]
+                home_prob = home_prob_roster
+                away_prob = away_prob_roster
+                home_adj = rr["home"].adjusted_rating
+                away_adj = rr["away"].adjusted_rating
+                home_base = rr["home"].baseline_rating
+                away_base = rr["away"].baseline_rating
+                home_pen = rr["home"].injury_penalty
+                away_pen = rr["away"].injury_penalty
+                home_miss = [
+                    {"name": m.name, "status": m.status, "penalty": m.win_prob_penalty}
+                    for m in rr["home"].excluded_players + rr["home"].discounted_players
+                ]
+                away_miss = [
+                    {"name": m.name, "status": m.status, "penalty": m.win_prob_penalty}
+                    for m in rr["away"].excluded_players + rr["away"].discounted_players
+                ]
 
     lam_h, lam_a = engine.expected_score_lambdas(home_rs, home_ra, away_rs, away_ra)
 
@@ -356,7 +362,7 @@ def build_game_forecast(
         lam_h, lam_a = blend_lambdas_with_lineup_scoring(
             db, sport, home_team, away_team, match_date, lam_h, lam_a,
         )
-        if home_adj is not None and away_adj is not None:
+        if home_adj is not None and away_adj is not None and roster_applied:
             lam_h, lam_a = adjust_lambdas_from_roster(
                 lam_h, lam_a,
                 home_adjusted=home_adj,
@@ -458,8 +464,12 @@ def build_game_forecast(
         away_win_prob=away_prob,
         home_win_prob_base=home_prob_base,
         away_win_prob_base=away_prob_base,
-        home_injury_adj=home_prob - home_prob_base,
-        away_injury_adj=away_prob - away_prob_base,
+        home_injury_adj=(
+            (home_prob_roster - home_prob_base) if roster_applied and home_prob_roster is not None else None
+        ),
+        away_injury_adj=(
+            (away_prob_roster - away_prob_base) if roster_applied and away_prob_roster is not None else None
+        ),
         predicted_winner=winner,
         predicted_home_score=pred_home,
         predicted_away_score=pred_away,

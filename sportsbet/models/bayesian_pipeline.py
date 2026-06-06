@@ -165,18 +165,18 @@ def build_pipeline_from_forecast(fc: Any) -> BayesianForecastPipeline:
 
     base_h = fc.home_win_prob_base if fc.home_win_prob_base is not None else fc.home_win_prob
     base_a = fc.away_win_prob_base if fc.away_win_prob_base is not None else fc.away_win_prob
-    inj_h = fc.home_win_prob if fc.home_injury_adj is not None else base_h
-    inj_a = fc.away_win_prob if fc.away_injury_adj is not None else base_a
+    inj_h = (base_h + fc.home_injury_adj) if fc.home_injury_adj is not None else None
+    inj_a = (base_a + fc.away_injury_adj) if fc.away_injury_adj is not None else None
     inj_note = ""
-    if fc.home_injury_adj is not None:
+    if fc.home_injury_adj is not None or fc.away_injury_adj is not None:
         inj_note = (
-            f"主 { _pct(base_h) }→{ _pct(inj_h) } ({fc.home_injury_adj:+.1%}) · "
+            f"主 { _pct(base_h) }→{ _pct(inj_h) } ({(fc.home_injury_adj or 0):+.1%}) · "
             f"客 { _pct(base_a) }→{ _pct(inj_a) } ({(fc.away_injury_adj or 0):+.1%})"
         )
     stages.append(
         PipelineStage(
             "injury", "⑩ 傷兵 / 陣容調整", "似然修正",
-            inj_h, inj_a, inj_note or "VORP/WAR 缺陣折扣",
+            inj_h, inj_a, inj_note or "無傷兵/球員資料 · 不輸出虛構修正",
         )
     )
 
