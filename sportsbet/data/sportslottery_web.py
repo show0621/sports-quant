@@ -234,8 +234,9 @@ def _parse_event_dom_text(
             if lines[scan] not in ("主場", "客場", "不讓分"):
                 teams.append(lines[scan])
             scan += 1
-        home_odds, scan = _next_odds(lines, scan)
-        away_odds, _scan2 = _next_odds(lines, scan)
+        away_odds, scan = _next_odds(lines, scan)
+        home_odds, _scan2 = _next_odds(lines, scan)
+        # 賠率列順序為「客場 → 主場」（隊名列常為主→客，勿混淆）
         if home_odds and away_odds:
             rows.append({**base, "market": "moneyline", "selection": "home", "handicap": None, "odds": home_odds})
             rows.append({**base, "market": "moneyline", "selection": "away", "handicap": None, "odds": away_odds})
