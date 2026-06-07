@@ -155,7 +155,11 @@ def data_quality_detail(db: SportsDatabase, sport: Sport) -> dict[str, dict[str,
         if blob_n == 0 and "playsport" in tw_sources:
             tw_note += "（玩運彩歷史；即時 Blob 尚無）"
     else:
-        tw_note = "無盤口 · 請 watch 或 repair_data"
+        tw_note = "無盤口 · 賽前需 JBOT_TOKEN 或 watch 同步"
+        from sportsbet import config
+
+        if not config.jbot_configured():
+            tw_note += "（Register Blob 已下架）"
 
     return {
         "team_stats": {

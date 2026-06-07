@@ -765,11 +765,14 @@ def main() -> None:
         detail = str(info.get("detail") or "")
         st.sidebar.caption(f"{mark} {label} · {detail}")
     if config.jbot_configured():
-        st.sidebar.success("JBot 歷史盤口已設定")
+        st.sidebar.success("JBot 盤口已設定（含賽前）")
     elif config.PLAYSPORT_MONEYLINE_ENABLED:
-        st.sidebar.info("Moneyline：玩運彩固定賠率（無 JBot）")
+        st.sidebar.warning(
+            "賽前盤口：Register Blob 已下架 · 玩運彩僅補歷史完賽場次。"
+            "請設定 JBOT_TOKEN 或本地 watch 推送 DB。"
+        )
     else:
-        st.sidebar.info("未設定盤口來源")
+        st.sidebar.warning("未設定 JBOT_TOKEN · 賽前盤口無法同步")
     if api_key_configured():
         st.sidebar.success("API-Sports 金鑰已設定（作為備援）")
     else:
@@ -788,12 +791,17 @@ def main() -> None:
         try:
             db = get_db()
             orch = DataOrchestrator(db)
+            svc = get_prediction_service()
             with st.spinner("完整同步中…（完成後推送 GitHub DB）"):
                 orch.sync_daily(sport, force_players=True)  # type: ignore[arg-type]
                 run_incremental_backtest_refresh(
                     db, sport, sync_api=False, sync_injuries=False,
                     days_lineup=config.SCHEDULE_SYNC_DAYS_AHEAD,
                 )
+                svc.sync_upcoming_odds(
+                    sport, days_ahead=config.SCHEDULE_SYNC_DAYS_AHEAD,
+                )
+                svc.run_upcoming(sport, days_ahead=config.SCHEDULE_SYNC_DAYS_AHEAD)
             push = _persist_database(f"chore(data): full sync {sport}", db=db)
             _show_db_push_result(push)
             st.session_state["last_api_error"] = ""

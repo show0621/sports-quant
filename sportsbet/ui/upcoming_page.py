@@ -324,6 +324,22 @@ def page_current_future_predictions(sport: str, svc: PredictionService) -> None:
         if stats.get("sportslottery_rows") or stats.get("jbot_upcoming"):
             st.rerun()
 
+    if forecasts and _forecasts_missing_odds(svc, forecasts):
+        from sportsbet.data.tw_odds_sync import prematch_odds_source_hint
+
+        st.warning(
+            "部分場次尚無台灣盤口（不讓分 / 讓分 / 大小分），因此無法計算 EV 推薦下注。"
+            "模型勝率與預估比分仍正常顯示。"
+        )
+        st.caption(prematch_odds_source_hint())
+        if not config.jbot_configured():
+            st.code(
+                "# Streamlit Cloud → Settings → Secrets\n"
+                'JBOT_TOKEN = "你的 JBot 密鑰"\n'
+                "# 申請：https://sportsbot.tech/api/",
+                language="toml",
+            )
+
     if not forecasts:
         db = svc.db
         raw = db.get_games_in_range(

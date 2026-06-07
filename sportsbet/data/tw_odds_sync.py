@@ -20,6 +20,75 @@ logger = logging.getLogger(__name__)
 Sport = str
 TW_BOOKMAKER = "sportslottery"
 CORE_MARKETS = ("moneyline", "spread", "total")
+TW_ODDS_BOOKMAKERS = ("sportslottery", "jbot", "playsport", "tw_standard")
+
+
+def _resolve_playsport_team_id(
+    name_to_id: dict[int, str],
+    team: str,
+    sport: Sport,
+) -> int | None:
+    """玩運彩 teamid 對照（支援「尼克」等縮寫，非僅「紐約尼克」）。"""
+    from sportsbet.data.team_names import build_reverse_map, team_bilingual
+
+    en, zh = team_bilingual(team, sport)  # type: ignore[arg-type]
+    rev = build_reverse_map(sport)  # type: ignore[arg-type]
+    short_zh = rev.get(en, "")
+    candidates: list[str] = []
+    for c in (team, en, zh, short_zh):
+        if c and c not in candidates:
+            candidates.append(c)
+
+    for tid, ps_name in name_to_id.items():
+        if ps_name in candidates:
+            return int(tid)
+
+    en_last = en.split()[-1].lower() if en else ""
+    for tid, ps_name in name_to_id.items():
+        ps_lower = ps_name.lower()
+        if en_last and en_last in ps_lower:
+            return int(tid)
+        if zh and (zh in ps_name or ps_name in zh):
+            return int(tid)
+        if short_zh and (short_zh in ps_name or ps_name in short_zh):
+            return int(tid)
+    return None
+
+
+def _game_has_any_odds(db: SportsDatabase, game_id: int) -> bool:
+    with db.connection() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM odds WHERE game_id = ? LIMIT 1",
+            (game_id,),
+        ).fetchone()
+    return row is not None
+
+
+def _game_has_tw_core_markets(db: SportsDatabase, game_id: int) -> bool:
+    """任一台湾盤口來源具備 moneyline / spread / total 即視為完整。"""
+    with db.connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT market FROM odds
+            WHERE game_id = ? AND bookmaker IN ({})
+            """.format(",".join("?" * len(TW_ODDS_BOOKMAKERS))),
+            (game_id, *TW_ODDS_BOOKMAKERS),
+        ).fetchall()
+    markets = {str(r["market"]) for r in rows}
+    return all(m in markets for m in CORE_MARKETS)
+
+
+def prematch_odds_source_hint() -> str:
+    """Streamlit / 日誌用：說明賽前盤口來源限制。"""
+    from sportsbet import config
+
+    if config.jbot_configured():
+        return "賽前盤口：JBot API（已設定 JBOT_TOKEN）"
+    return (
+        "台灣運彩 Register Blob 已下架，賽前盤口無法從官方 Blob 取得。"
+        "請在 Streamlit Secrets 或 .env 設定 JBOT_TOKEN，"
+        "或在本地執行 `python main.py watch --sport nba` 同步後推送 DB。"
+    )
 
 
 def _match_game_id(
@@ -141,7 +210,7 @@ def fill_playsport_gaps_for_date(
     need_gids = [
         int(r["id"])
         for _, r in games.iterrows()
-        if not _game_tw_markets_complete(db, int(r["id"]))
+        if not _game_has_tw_core_markets(db, int(r["id"]))
     ]
     if not need_gids:
         return 0
@@ -158,12 +227,9 @@ def fill_playsport_gaps_for_date(
     team_ids = scraper.list_team_ids(sport)  # type: ignore[arg-type]
     name_to_id = {name: tid for tid, name in team_ids.items()}
 
-    from sportsbet.data.team_names import team_bilingual
-
     targets: list[int] = []
     for team in teams:
-        zh = team_bilingual(team, sport)[1] or team
-        tid = name_to_id.get(zh) or name_to_id.get(team)
+        tid = _resolve_playsport_team_id(name_to_id, team, sport)
         if tid:
             targets.append(int(tid))
     targets = list(dict.fromkeys(targets))
@@ -216,7 +282,7 @@ def sync_tw_odds_for_date(
     if use_ps:
         games = db.get_games(sport, match_date)
         incomplete = any(
-            not _game_tw_markets_complete(db, int(r["id"])) for _, r in games.iterrows()
+            not _game_has_tw_core_markets(db, int(r["id"])) for _, r in games.iterrows()
         ) if not games.empty else out["sportslottery_rows"] == 0
         if incomplete or out["sportslottery_rows"] == 0:
             out["playsport_fallback"] = fill_playsport_gaps_for_date(
