@@ -196,6 +196,12 @@ def cmd_simulate(args: argparse.Namespace) -> None:
     subprocess.run([sys.executable, "-m", "streamlit", "run", str(target)], check=False)
 
 
+def cmd_optimize(args: argparse.Namespace) -> None:
+    from scripts.bet_optimizer_cli import run_cli
+
+    run_cli()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="運動計算專案 — NBA/MLB 運彩量化系統")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -276,6 +282,9 @@ def main() -> None:
     p_sim = sub.add_parser("simulate", help="啟動 Streamlit 看板")
     p_sim.add_argument("--legacy", action="store_true", help="使用舊版單頁模擬器")
     p_sim.set_defaults(func=cmd_simulate)
+
+    p_opt = sub.add_parser("optimize", help="全玩法 EV 優化 / 對沖 / 串關 CLI")
+    p_opt.set_defaults(func=cmd_optimize)
 
     args = parser.parse_args()
     args.func(args)
