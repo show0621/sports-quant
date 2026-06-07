@@ -82,19 +82,6 @@ def _apply_statshub_bundle(
         db.upsert_player(sport, str(pid), str(name), team, position=p.get("position"))
         out["players"] += 1
 
-        stats = p.get("stats") if isinstance(p.get("stats"), dict) else {}
-        if stats or p.get("points") is not None:
-            db.upsert_player_stats(
-                sport,
-                str(pid),
-                report_date,
-                rolling_off_rating=float(p["points"]) if p.get("points") is not None else None,
-                bpm=float(p["rebounds"]) if p.get("rebounds") is not None else None,
-                vorp=float(p["assists"]) if p.get("assists") is not None else None,
-                usg_pct=float(p["minutes"]) if p.get("minutes") is not None else None,
-            )
-            out["player_stats"] += 1
-
     for inj in merged.get("injuries") or []:
         pid = inj.get("player_id")
         name = inj.get("name")
@@ -152,6 +139,95 @@ def sync_statshub_for_game(
     return _apply_statshub_bundle(db, sport, game_id, bundle, client=client)
 
 
+def auto_link_statshub_match_ids(db: SportsDatabase, sport: Sport, *, days_ahead: int = 21) -> int:
+    """同一對戰組合：已綁定 sportradar_match_id 的場次共享給未綁定場次。"""
+    from datetime import date, timedelta
+
+    end = (date.today() + timedelta(days=days_ahead)).isoformat()
+    linked = 0
+    with db.connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT home_team, away_team, sportradar_match_id
+            FROM games
+            WHERE sport = ?
+              AND match_date >= date('now', '-1 day')
+              AND match_date <= ?
+              AND sportradar_match_id IS NOT NULL
+              AND TRIM(sportradar_match_id) != ''
+            GROUP BY home_team, away_team, sportradar_match_id
+            """,
+            (sport, end),
+        ).fetchall()
+        for row in rows:
+            mid = str(row["sportradar_match_id"])
+            cur = conn.execute(
+                """
+                UPDATE games SET sportradar_match_id = ?
+                WHERE sport = ?
+                  AND home_team = ?
+                  AND away_team = ?
+                  AND match_date >= date('now', '-1 day')
+                  AND match_date <= ?
+                  AND (sportradar_match_id IS NULL OR TRIM(sportradar_match_id) = '')
+                """,
+                (mid, sport, row["home_team"], row["away_team"], end),
+            )
+            linked += cur.rowcount
+    return linked
+
+
+def supplement_injuries_from_statshub(
+    db: SportsDatabase,
+    sport: Sport,
+    *,
+    days_ahead: int = 7,
+) -> int:
+    """ESPN 無該隊傷兵時，從 StatsHub 同步補足（需 sportradar_match_id）。"""
+    if sport != "nba" or not config.STATSHUB_ENABLED:
+        return 0
+
+    from datetime import date, timedelta
+
+    auto_link_statshub_match_ids(db, sport, days_ahead=days_ahead)
+    report_date = date.today().isoformat()
+    end = (date.today() + timedelta(days=days_ahead)).isoformat()
+    espn_teams: set[str] = set()
+    inj = db.get_injuries(sport, report_date)
+    if not inj.empty:
+        espn_teams = set(inj["team"].astype(str))
+
+    added = 0
+    with db.connection() as conn:
+        games = conn.execute(
+            """
+            SELECT id, home_team, away_team, sportradar_match_id
+            FROM games
+            WHERE sport = ?
+              AND match_date >= date('now', '-1 day')
+              AND match_date <= ?
+              AND sportradar_match_id IS NOT NULL
+              AND TRIM(sportradar_match_id) != ''
+            """,
+            (sport, end),
+        ).fetchall()
+
+    client = StatsHubClient(tenant=config.STATSHUB_TENANT, lang=config.STATSHUB_LANG)
+    for row in games:
+        home = str(row["home_team"])
+        away = str(row["away_team"])
+        if home in espn_teams and away in espn_teams:
+            continue
+        gid = int(row["id"])
+        mid = str(row["sportradar_match_id"])
+        try:
+            part = sync_statshub_for_game(db, sport, gid, mid, client=client)
+            added += int(part.get("injuries", 0))
+        except Exception as exc:
+            logger.debug("StatsHub 傷兵補足略過 game=%s: %s", gid, exc)
+    return added
+
+
 def sync_statshub_for_upcoming(
     db: SportsDatabase,
     sport: Sport,
@@ -185,6 +261,7 @@ def link_statshub_match(
     if not mid or not mid.isdigit():
         return None
     db.set_sportradar_match_id(game_id, mid)
+    auto_link_statshub_match_ids(db, "nba")
     return mid
 
 

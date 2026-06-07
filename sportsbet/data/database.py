@@ -771,6 +771,21 @@ class SportsDatabase:
                 """,
                 tuple(row[c] for c in cols),
             )
+            conn.execute(
+                """
+                UPDATE game_forecasts SET
+                    home_win_prob_v2 = NULL,
+                    away_win_prob_v2 = NULL,
+                    prob_over_v2 = NULL,
+                    prob_under_v2 = NULL,
+                    prob_home_cover_v2 = NULL,
+                    member_ml_home_pct = NULL,
+                    member_spread_home_pct = NULL,
+                    member_over_pct = NULL
+                WHERE game_id = ?
+                """,
+                (int(row["game_id"]),),
+            )
 
     def get_upcoming_forecast_review(self, sport: Sport) -> pd.DataFrame:
         """已儲存的現在/未來預測紀錄（未結束賽事）。"""

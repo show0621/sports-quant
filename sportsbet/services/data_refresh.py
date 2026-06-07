@@ -353,7 +353,7 @@ def run_incremental_backtest_refresh(
             db, sport, replace_all=True,
         )
 
-    svc.run_upcoming(sport, days_ahead=days_lineup)
+    svc.run_upcoming(sport, days_ahead=config.SCHEDULE_SYNC_DAYS_AHEAD)
 
     from sportsbet.services.sync_accumulation import accumulate_after_sync, ensure_ledger_start_date
 
@@ -410,7 +410,7 @@ def run_full_backtest_refresh(
         )
 
     out["predictions"] = rebuild_predictions_from_forecasts(db, sport, replace_all=True)
-    svc.run_upcoming(sport, days_ahead=days_lineup)
+    svc.run_upcoming(sport, days_ahead=config.SCHEDULE_SYNC_DAYS_AHEAD)
 
     from sportsbet.services.sync_accumulation import accumulate_after_sync, ensure_ledger_start_date
 

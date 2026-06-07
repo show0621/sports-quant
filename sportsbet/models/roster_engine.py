@@ -9,6 +9,7 @@ V2 動態陣容實力評估 (Bottom-Up Analytics)。
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -111,6 +112,18 @@ class DynamicRosterRatingEngine:
             players = players[
                 players["vorp"].notna() | players["war"].notna()
             ].head(8 if sport == "nba" else 9).copy()
+            if players.empty:
+                return RosterRatingResult(
+                    sport=sport, team=team, match_date=match_date,
+                    baseline_rating=0.0, adjusted_rating=0.0, injury_penalty=0.0, active_count=0,
+                    data_ready=False,
+                )
+            n = len(players)
+            if sport == "nba":
+                players["expected_minutes"] = 240.0 / max(n, 1)
+            else:
+                players["expected_innings"] = 9.0 / max(n, 1)
+            players["is_starter"] = [i < (5 if sport == "nba" else 1) for i in range(n)]
         else:
             return RosterRatingResult(
                 sport=sport, team=team, match_date=match_date,
@@ -121,8 +134,14 @@ class DynamicRosterRatingEngine:
         status_map = self._injury_status_map(sport, team, match_date)
 
         if sport == "nba":
+            if "expected_minutes" not in players.columns:
+                n = max(len(players), 1)
+                players["expected_minutes"] = 240.0 / n
             total_minutes = float(players["expected_minutes"].fillna(0).sum()) or 240.0
         else:
+            if "expected_innings" not in players.columns:
+                n = max(len(players), 1)
+                players["expected_innings"] = 9.0 / n
             total_minutes = float(players["expected_innings"].fillna(0).sum()) or 9.0
 
         baseline_rating = 0.0
@@ -133,7 +152,15 @@ class DynamicRosterRatingEngine:
         for _, row in players.iterrows():
             pid = row["player_id"]
             metric = self._player_metric(sport, row)
-            weight = self._minutes_weight(sport, row, total_minutes)
+            if sport == "nba":
+                raw_min = row.get("expected_minutes")
+            else:
+                raw_min = row.get("expected_innings")
+            try:
+                em = float(raw_min) if raw_min is not None and pd.notna(raw_min) else 0.0
+            except (TypeError, ValueError):
+                em = 0.0
+            weight = em / total_minutes if total_minutes > 0 and em > 0 else 0.0
             if weight <= 0:
                 continue
 
@@ -170,7 +197,7 @@ class DynamicRosterRatingEngine:
                     )
                 )
 
-        if baseline_rating <= 0:
+        if baseline_rating <= 0 or not math.isfinite(baseline_rating):
             return RosterRatingResult(
                 sport=sport,
                 team=team,
@@ -215,6 +242,8 @@ class DynamicRosterRatingEngine:
         使用 logistic 風格差值：rating_diff → win prob
         """
         diff = team_rating.adjusted_rating - opponent_rating.adjusted_rating
+        if not math.isfinite(diff):
+            return team_topdown_win_pct, 0.0
         scale = 3.5 if sport == "nba" else 2.5
         roster_prob = 1.0 / (1.0 + 10 ** (-diff / scale))
 
@@ -241,7 +270,12 @@ class DynamicRosterRatingEngine:
         """單場雙隊陣容評估 + 混合勝率。"""
         home_rr = self.compute_team_rating(sport, home_team, match_date)
         away_rr = self.compute_team_rating(sport, away_team, match_date)
-        if not (home_rr.data_ready and away_rr.data_ready):
+        if not (
+            home_rr.data_ready
+            and away_rr.data_ready
+            and math.isfinite(home_rr.baseline_rating)
+            and math.isfinite(away_rr.baseline_rating)
+        ):
             return {
                 "home": home_rr,
                 "away": away_rr,

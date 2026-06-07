@@ -21,6 +21,18 @@ def sync_v2_player_data(db: SportsDatabase, sport: str, *, days_lineup: int = 7)
 
     injuries_n = sync_espn_injuries(db, sport, report_date=date.today().isoformat(), client=client)
 
+    statshub_inj = 0
+    if sport == "nba":
+        from sportsbet import config
+
+        if config.STATSHUB_ENABLED:
+            try:
+                from sportsbet.data.statshub_sync import supplement_injuries_from_statshub
+
+                statshub_inj = supplement_injuries_from_statshub(db, sport, days_ahead=days_lineup)
+            except Exception:
+                statshub_inj = 0
+
     if sport == "nba":
         from sportsbet.data.nba_player_stats import sync_nba_player_stats
 
@@ -39,21 +51,7 @@ def sync_v2_player_data(db: SportsDatabase, sport: str, *, days_lineup: int = 7)
         client=client,
     )
 
-    statshub_n: dict[str, int] = {}
-    if sport == "nba":
-        from sportsbet import config
-
-        if config.STATSHUB_ENABLED:
-            try:
-                from sportsbet.data.statshub_sync import sync_statshub_for_upcoming
-
-                statshub_n = sync_statshub_for_upcoming(db, sport, days_ahead=days_lineup)
-            except Exception:
-                statshub_n = {}
-
     out = {"players": players_n, "injuries": injuries_n, "lineups": lineups_n}
-    if statshub_n:
-        out["statshub_games"] = statshub_n.get("games", 0)
-        out["statshub_injuries"] = statshub_n.get("injuries", 0)
-        out["statshub_lineups"] = statshub_n.get("lineups", 0)
+    if statshub_inj:
+        out["statshub_injuries"] = statshub_inj
     return out

@@ -352,11 +352,14 @@ def build_game_forecast(
         from sportsbet.data.data_quality import matchup_injury_adjustment_ready
 
         if matchup_injury_adjustment_ready(db, sport, home_team, away_team, match_date):
-            from sportsbet.models.roster_engine import DynamicRosterRatingEngine
+            try:
+                from sportsbet.models.roster_engine import DynamicRosterRatingEngine
 
-            rr = DynamicRosterRatingEngine(db).matchup_with_roster(
-                sport, home_team, away_team, match_date, home_prob, away_prob,
-            )
+                rr = DynamicRosterRatingEngine(db).matchup_with_roster(
+                    sport, home_team, away_team, match_date, home_prob, away_prob,
+                )
+            except Exception:
+                rr = {"roster_applied": False}
             if rr.get("roster_applied"):
                 roster_applied = True
                 home_prob_roster = rr["home_win_prob"]

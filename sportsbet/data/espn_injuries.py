@@ -394,10 +394,15 @@ def sync_espn_projected_lineups(
             ranked.sort(key=lambda x: x[2], reverse=True)
             limit = 8 if sport == "nba" else 9
             ranked = ranked[:limit]
+            total_metric = sum(x[2] for x in ranked) or 1.0
 
-            for i, (pid, ath, _metric, minutes) in enumerate(ranked):
+            for i, (pid, ath, metric, _minutes) in enumerate(ranked):
                 name = ath.get("displayName") or ""
                 pos = (ath.get("position") or {}).get("abbreviation") or ""
+                if sport == "nba":
+                    minutes = 240.0 * metric / total_metric
+                else:
+                    minutes = 6.0 if pos == "SP" else 1.0
                 db.upsert_player(sport, pid, name, team_name, pos)
                 db.upsert_projected_lineup(
                     sport,

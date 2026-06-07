@@ -790,7 +790,10 @@ def main() -> None:
             orch = DataOrchestrator(db)
             with st.spinner("完整同步中…（完成後推送 GitHub DB）"):
                 orch.sync_daily(sport, force_players=True)  # type: ignore[arg-type]
-                run_incremental_backtest_refresh(db, sport, sync_api=False, sync_injuries=False)
+                run_incremental_backtest_refresh(
+                    db, sport, sync_api=False, sync_injuries=False,
+                    days_lineup=config.SCHEDULE_SYNC_DAYS_AHEAD,
+                )
             push = _persist_database(f"chore(data): full sync {sport}", db=db)
             _show_db_push_result(push)
             st.session_state["last_api_error"] = ""
