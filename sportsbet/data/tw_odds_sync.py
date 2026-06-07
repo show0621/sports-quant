@@ -225,6 +225,7 @@ def sync_tw_odds_for_date(
                 match_date,
                 max_teams=config.PLAYSPORT_MAX_TEAMS_PER_SYNC,
             )
+
     return out
 
 
@@ -247,5 +248,9 @@ def sync_tw_odds_recent(
         totals["sportslottery_rows"] += part["sportslottery_rows"]
         totals["playsport_fallback"] += part["playsport_fallback"]
         totals["days"] += 1
+    if config.jbot_configured():
+        from sportsbet.data.jbot_odds_sync import sync_jbot_upcoming_odds
+
+        totals["jbot_upcoming"] = sync_jbot_upcoming_odds(db, sport, days_ahead=span)
     db.set_backtest_sync_meta(sport, "tw_odds_synced_at", date.today().isoformat())
     return totals

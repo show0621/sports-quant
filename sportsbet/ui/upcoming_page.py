@@ -237,6 +237,19 @@ def _render_forecast_card(
         st.dataframe(detail, use_container_width=True, hide_index=True)
 
 
+def _forecasts_missing_odds(svc: PredictionService, forecasts: list) -> bool:
+    from sportsbet.ui.odds_display import summarize_game_odds
+
+    for f in forecasts:
+        if not getattr(f, "game_id", None):
+            continue
+        odds = summarize_game_odds(svc.db, f.game_id)
+        if odds.get("ml_home") is None and odds.get("spread_home_line") is None:
+            if odds.get("total_line") is None and not odds.get("margin_odds"):
+                return True
+    return False
+
+
 def page_current_future_predictions(sport: str, svc: PredictionService) -> None:
     from sportsbet import config
 
@@ -244,7 +257,7 @@ def page_current_future_predictions(sport: str, svc: PredictionService) -> None:
     st.caption(
         "以台灣時間顯示 · 賽程與預測自 DB 讀取（重整不重算）· "
         "按「重新計算」或「同步賽程」才更新 · "
-        "中英文隊名 · 盤口：大小分、讓分、勝負 · 貝氏集成 PK 勝率"
+        "中英文隊名 · 盤口：不讓分、讓分、勝分差、大小分 · 推薦下注（EV）· 貝氏集成 PK 勝率"
     )
     with st.expander("貝氏集成 PK 模型方法論", expanded=False):
         render_methodology_overview()
@@ -293,6 +306,14 @@ def page_current_future_predictions(sport: str, svc: PredictionService) -> None:
 
     forecasts = _load_upcoming_forecasts(svc, sport, days_ahead)
     today = date.today().isoformat()
+
+    sync_key = f"odds_auto_{sport}_{today}"
+    if forecasts and _forecasts_missing_odds(svc, forecasts) and not st.session_state.get(sync_key):
+        with st.spinner("偵測到缺漏盤口，正在同步台灣運彩 / JBot…"):
+            stats = svc.sync_upcoming_odds(sport, days_ahead=days_ahead)
+        st.session_state[sync_key] = True
+        if stats.get("sportslottery_rows") or stats.get("jbot_upcoming"):
+            st.rerun()
 
     if not forecasts:
         db = svc.db

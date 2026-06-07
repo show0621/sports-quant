@@ -109,11 +109,29 @@ def _bet_settled(
             if total > handicap:
                 return False
             return None
+    if market == "margin":
+        from sportsbet.models.margin_bands import bands_for_sport, margin_band_hit
+
+        for band in bands_for_sport("nba"):
+            if band.key == selection:
+                return margin_band_hit(band.side, band.lo, band.hi, home_score, away_score)
+        if selection.startswith("home_") or selection.startswith("away_"):
+            parts = selection.split("_")
+            if len(parts) >= 3:
+                side = parts[0]
+                try:
+                    lo = int(parts[1])
+                    hi = int(parts[2]) if parts[2] != "plus" else 99
+                    return margin_band_hit(side, lo, hi, home_score, away_score)
+                except ValueError:
+                    pass
     return None
 
 
 def _pick_with_ev(
     candidates: list[tuple[str, str, float | None, float | None, float | None]],
+    *,
+    market: str = "spread",
 ) -> MarketPickView | None:
     """從 (selection, label, line, odds, prob) 候選中取 EV 最高者。"""
     best: MarketPickView | None = None
@@ -130,7 +148,7 @@ def _pick_with_ev(
                 odds=float(odds),
                 model_prob=float(prob),
                 ev=ev,
-                market="spread",
+                market=market,
                 selection=selection,
             )
     return best
@@ -193,7 +211,7 @@ def build_game_market_picks(
         spread_candidates.append(
             ("away", f"客 {a_en} {a_line:+.1f}", a_line, odds.get("spread_away_odds"), prob),
         )
-    spread = _pick_with_ev(spread_candidates)
+    spread = _pick_with_ev(spread_candidates, market="spread")
     if spread is None and margin_f is not None:
         m = margin_f
         if m > 0:
@@ -249,14 +267,38 @@ def build_game_market_picks(
         if total_f is not None:
             total.selection_label += f" · 預估 {total_f:.1f}"
 
+    margin: MarketPickView | None = None
+    margin_odds = odds.get("margin_odds") or {}
+    if margin_f is not None and margin_odds:
+        from sportsbet.models.margin_bands import bands_for_sport, best_margin_pick, prob_margin_band
+
+        band_probs = {
+            band.key: prob_margin_band(
+                band.side, band.lo, band.hi, margin_f, sport=sport, pred_total=total_f,
+            )
+            for band in bands_for_sport(sport)
+        }
+        sel_key, prob, ev = best_margin_pick(band_probs, margin_odds, sport=sport, min_ev=-999.0)
+        if sel_key and prob is not None:
+            band = next(b for b in bands_for_sport(sport) if b.key == sel_key)
+            margin = MarketPickView(
+                band.label_zh,
+                None,
+                float(margin_odds[sel_key]),
+                prob,
+                ev,
+                market="margin",
+                selection=sel_key,
+            )
+
     if is_final and home_score is not None and away_score is not None:
         hs, aws = int(home_score), int(away_score)
-        for pick in (ml, spread, total):
+        for pick in (ml, spread, total, margin):
             if pick and pick.market and pick.selection:
                 line = pick.line if pick.market != "moneyline" else None
                 pick.settled = _bet_settled(pick.market, pick.selection, line, hs, aws)
 
-    return {"moneyline": ml, "spread": spread, "total": total}
+    return {"moneyline": ml, "spread": spread, "total": total, "margin": margin}
 
 
 def actual_result_line(
@@ -334,6 +376,7 @@ def summarize_game_odds(db: SportsDatabase, game_id: int | None) -> dict[str, ob
         "total_line": None,
         "over_odds": None,
         "under_odds": None,
+        "margin_odds": {},
     }
     if not game_id:
         return empty
@@ -370,7 +413,70 @@ def summarize_game_odds(db: SportsDatabase, game_id: int | None) -> dict[str, ob
         "total_line": total_line,
         "over_odds": float(ov["odds"]) if ov is not None else None,
         "under_odds": float(un["odds"]) if un is not None else None,
+        "margin_odds": {
+            str(row["selection"]): float(row["odds"])
+            for _, row in raw.iterrows()
+            if str(row.get("market")) == "margin" and pd.notna(row.get("odds"))
+        },
     }
+
+
+def _margin_odds_html(margin_odds: dict[str, float], sport: str, *, limit: int = 6) -> str:
+    if not margin_odds:
+        return "<div class='sq-odds-cap'>尚無勝分差盤</div>"
+    from sportsbet.models.margin_bands import bands_for_sport
+
+    labels = {b.key: b.label_zh for b in bands_for_sport(sport)}
+    lines = []
+    for key, o in sorted(margin_odds.items(), key=lambda x: x[1]):
+        label = labels.get(key, key)
+        lines.append(f"<div class='sq-odds-line'>{label} · <strong>{_fmt_odds(o)}</strong></div>")
+        if len(lines) >= limit:
+            break
+    extra = len(margin_odds) - limit
+    if extra > 0:
+        lines.append(f"<div class='sq-odds-cap'>另有 {extra} 個區間…</div>")
+    return "".join(lines)
+
+
+def render_bet_recommendations(
+    picks: dict[str, MarketPickView | None],
+    *,
+    min_ev: float | None = None,
+) -> None:
+    """依 EV 門檻列出各玩法推薦下注。"""
+    from sportsbet import config
+
+    threshold = config.MIN_EV_THRESHOLD if min_ev is None else min_ev
+    labels = {
+        "moneyline": "不讓分（勝負）",
+        "spread": "讓分",
+        "margin": "勝分差",
+        "total": "大小分",
+    }
+    rows: list[tuple[str, MarketPickView]] = []
+    for key, pick in picks.items():
+        if pick and pick.ev is not None and pick.odds is not None and pick.ev >= threshold:
+            rows.append((labels.get(key, key), pick))
+    rows.sort(key=lambda x: float(x[1].ev or 0), reverse=True)
+
+    if not rows:
+        st.markdown(
+            f"<div class='sq-odds-cap'>尚無 EV ≥ {threshold:.0%} 的推薦（需有盤口賠率）</div>",
+            unsafe_allow_html=True,
+        )
+        return
+
+    body = "".join(
+        f"<div class='sq-odds-line'><strong>{label}</strong> · {pick.selection_label} · "
+        f"賠率 {_fmt_odds(pick.odds)} · 模型 {_fmt_pct(pick.model_prob)} · "
+        f"<span class='{_ev_class(pick.ev)}'>EV {_fmt_ev(pick.ev)}</span></div>"
+        for label, pick in rows
+    )
+    st.markdown(
+        f"<div class='sq-rec-panel'><h4>推薦下注（EV ≥ {threshold:.0%}）</h4>{body}</div>",
+        unsafe_allow_html=True,
+    )
 
 
 def render_odds_panel(
@@ -378,10 +484,26 @@ def render_odds_panel(
     fc: GameForecast,
     sport: str,
 ) -> None:
-    """清楚呈現大小分、讓分（勝分差）、主客勝負賠率。"""
+    """呈現四玩法盤口（不讓分 / 讓分 / 勝分差 / 大小分）與模型推薦。"""
+    from sportsbet.models.forecast import forecast_pick_dict
+
     odds = summarize_game_odds(db, fc.game_id)
+    fc_dict = forecast_pick_dict(fc)
+    is_final = str(getattr(fc, "status", "") or "").lower() == "final"
+    hs = getattr(fc, "home_score", None)
+    aws = getattr(fc, "away_score", None)
+    picks = build_game_market_picks(
+        fc_dict,
+        odds,
+        sport,
+        home_team=fc.home_team,
+        away_team=fc.away_team,
+        home_score=int(hs) if hs is not None and not pd.isna(hs) else None,
+        away_score=int(aws) if aws is not None and not pd.isna(aws) else None,
+        is_final=is_final,
+    )
+
     total_label = "大小分" if sport == "nba" else "大小分（總得分）"
-    spread_label = "讓分（勝分差）"
 
     ml_body = (
         f"<div class='sq-odds-line'>主隊 <strong>{_fmt_odds(odds['ml_home'])}</strong></div>"
@@ -389,6 +511,9 @@ def render_odds_panel(
     )
     if odds["ml_home"] is None and odds["ml_away"] is None:
         ml_body += "<div class='sq-odds-cap'>尚無勝負賠率</div>"
+    ml_pick = picks.get("moneyline")
+    if ml_pick:
+        ml_body += f"<div class='sq-odds-cap'>模型 → {ml_pick.selection_label}</div>"
 
     sp_parts = []
     if odds["spread_home_line"] is not None:
@@ -404,6 +529,22 @@ def render_odds_panel(
         sp_body = "<div class='sq-odds-cap'>尚無讓分盤</div>"
     elif fc.predicted_margin is not None:
         sp_body += f"<div class='sq-odds-cap'>模型預估分差 {fc.predicted_margin:+.1f}</div>"
+    sp_pick = picks.get("spread")
+    if sp_pick and sp_pick.odds is not None:
+        sp_body += (
+            f"<div class='sq-odds-cap'>推 → {sp_pick.selection_label} · EV {_fmt_ev(sp_pick.ev)}</div>"
+        )
+
+    margin_odds = odds.get("margin_odds") or {}
+    mg_body = _margin_odds_html(margin_odds, sport)
+    if fc.predicted_margin is not None:
+        mg_body += f"<div class='sq-odds-cap'>模型預估分差 {fc.predicted_margin:+.1f}</div>"
+    mg_pick = picks.get("margin")
+    if mg_pick:
+        mg_body += (
+            f"<div class='sq-odds-cap'>推 → {mg_pick.selection_label} · "
+            f"賠率 {_fmt_odds(mg_pick.odds)} · EV {_fmt_ev(mg_pick.ev)}</div>"
+        )
 
     line = odds["total_line"] if odds["total_line"] is not None else fc.total_line
     if line is not None:
@@ -422,19 +563,26 @@ def render_odds_panel(
         tot_body = "<div class='sq-odds-cap'>尚無大小分盤</div>"
         if fc.predicted_total is not None:
             tot_body += f"<div class='sq-odds-cap'>模型預估總分 {fc.predicted_total:.1f}</div>"
+    tot_pick = picks.get("total")
+    if tot_pick and tot_pick.odds is not None:
+        tot_body += f"<div class='sq-odds-cap'>推 → {tot_pick.selection_label} · EV {_fmt_ev(tot_pick.ev)}</div>"
 
     st.markdown(
         f"""
         <div class="sq-odds-panel">
             <h4>盤口分析</h4>
-            <div class="sq-odds-grid">
+            <div class="sq-odds-grid sq-odds-grid-4">
                 <div class="sq-odds-col">
                     <div class="sq-odds-col-title">勝負（不讓分）</div>
                     {ml_body}
                 </div>
                 <div class="sq-odds-col">
-                    <div class="sq-odds-col-title">{spread_label}</div>
+                    <div class="sq-odds-col-title">讓分</div>
                     {sp_body}
+                </div>
+                <div class="sq-odds-col">
+                    <div class="sq-odds-col-title">勝分差</div>
+                    {mg_body}
                 </div>
                 <div class="sq-odds-col">
                     <div class="sq-odds-col-title">{total_label}</div>
@@ -445,3 +593,4 @@ def render_odds_panel(
         """,
         unsafe_allow_html=True,
     )
+    render_bet_recommendations(picks)

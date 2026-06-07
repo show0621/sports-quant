@@ -124,3 +124,55 @@ def sync_jbot_odds_to_db(
     db.set_backtest_sync_meta(sport, "jbot_odds_synced_to", end_d.isoformat())  # type: ignore[arg-type]
     logger.info("JBot 寫入 sport=%s rows=%d (%s~%s)", sport, n, start_d, end_d)
     return n
+
+
+def sync_jbot_upcoming_odds(
+    db: SportsDatabase,
+    sport: Sport,
+    *,
+    days_ahead: int = 14,
+    mode: str = "close",
+) -> int:
+    """同步今日～未來 N 天 JBot 盤口（不讓分/讓分/大小），供賽事預測頁使用。"""
+    if not config.jbot_configured():
+        return 0
+
+    today = date.today()
+    end_d = today + timedelta(days=days_ahead)
+    client = JBotClient()
+    try:
+        odds_df = client.fetch_date_range(sport, today, end_d, mode)  # type: ignore[arg-type]
+    except Exception as exc:
+        logger.warning("JBot upcoming 失敗 sport=%s: %s", sport, exc)
+        return 0
+
+    if odds_df.empty:
+        return 0
+
+    phase_pref = "close" if mode in ("close", "both", "all") else "open"
+    if "odds_phase" in odds_df.columns:
+        phased = odds_df[odds_df["odds_phase"] == phase_pref]
+        if not phased.empty:
+            odds_df = phased
+
+    n = 0
+    for match_date, grp in odds_df.groupby(odds_df["match_date"].astype(str).str[:10]):
+        games = db.get_games(sport, str(match_date))
+        if games.empty:
+            continue
+        for _, o in grp.iterrows():
+            gid = _match_game_id(db, sport, games, o["home_team"], o["away_team"])
+            if gid is None:
+                continue
+            db.upsert_odds(
+                gid,
+                str(o["market"]),
+                str(o["selection"]),
+                float(o["odds"]),
+                handicap=float(o["handicap"]) if pd.notna(o.get("handicap")) else None,
+                bookmaker="jbot",
+                odds_phase=str(o.get("odds_phase", phase_pref)),
+            )
+            n += 1
+    logger.info("JBot upcoming sport=%s rows=%d (%s~%s)", sport, n, today, end_d)
+    return n

@@ -197,8 +197,11 @@ def inject_dashboard_theme() -> None:
         }
         .sq-pred-grid {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 0.55rem;
+        }
+        @media (max-width: 1100px) {
+            .sq-pred-grid { grid-template-columns: repeat(2, 1fr); }
         }
         @media (max-width: 768px) {
             .sq-pred-grid { grid-template-columns: 1fr; }
@@ -321,8 +324,28 @@ def inject_dashboard_theme() -> None:
             grid-template-columns: repeat(3, 1fr);
             gap: 0.65rem;
         }
+        .sq-odds-grid.sq-odds-grid-4 {
+            grid-template-columns: repeat(4, 1fr);
+        }
+        @media (max-width: 1100px) {
+            .sq-odds-grid.sq-odds-grid-4 { grid-template-columns: repeat(2, 1fr); }
+        }
         @media (max-width: 768px) {
             .sq-odds-grid { grid-template-columns: 1fr; }
+            .sq-odds-grid.sq-odds-grid-4 { grid-template-columns: 1fr; }
+        }
+        .sq-rec-panel {
+            margin-top: 0.75rem;
+            padding: 0.65rem 0.75rem;
+            background: var(--sq-surface);
+            border: 1px solid var(--sq-border-light);
+            border-radius: 10px;
+        }
+        .sq-rec-panel h4 {
+            margin: 0 0 0.5rem 0;
+            font-size: 0.82rem;
+            font-weight: 600;
+            color: var(--sq-muted);
         }
         .sq-odds-col {
             background: var(--sq-surface);

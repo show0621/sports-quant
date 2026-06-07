@@ -181,12 +181,18 @@ def _render_prediction_strip(
         actual_line=actual_txt,
     )
     spread_body = format_market_pick_html(picks.get("spread"), extra_sub=margin_hint)
+    margin_body = format_market_pick_html(picks.get("margin"))
     total_label = "大小分" if sport == "nba" else "大小分（總得分）"
 
     summary_tags = ""
     if is_final:
         parts: list[str] = []
-        for key, label in [("moneyline", "勝負"), ("spread", "讓分"), ("total", "大小")]:
+        for key, label in [
+            ("moneyline", "勝負"),
+            ("spread", "讓分"),
+            ("margin", "勝分差"),
+            ("total", "大小"),
+        ]:
             p = picks.get(key)
             if p is None or p.settled is None:
                 continue
@@ -210,8 +216,12 @@ def _render_prediction_strip(
                     <div class="sq-pred-sub">主 {_pct(fc.home_win_prob)} · 客 {_pct(fc.away_win_prob)}</div>
                 </div>
                 <div class="sq-pred-cell">
-                    <div class="sq-pred-label">勝分差（讓分）</div>
+                    <div class="sq-pred-label">讓分</div>
                     {spread_body}
+                </div>
+                <div class="sq-pred-cell">
+                    <div class="sq-pred-label">勝分差</div>
+                    {margin_body}
                 </div>
                 <div class="sq-pred-cell">
                     <div class="sq-pred-label">{total_label}</div>

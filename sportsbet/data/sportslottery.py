@@ -38,6 +38,22 @@ MARKET_ID_MAP: dict[int, str] = {
     7: "margin",      # 勝分差
 }
 
+# 勝分差選項位置（NBA 12 格常見配置）
+NBA_MARGIN_BY_POS: list[str] = [
+    "home_1_5", "home_6_10", "home_11_15", "home_16_20", "home_21_25", "home_26_plus",
+    "away_1_5", "away_6_10", "away_11_15", "away_16_20", "away_21_25", "away_26_plus",
+]
+
+# Blob 受注中（賽前）路徑：Register/On.json 已下架，依序嘗試後備
+REGISTER_BLOB_PATHS: tuple[str, ...] = (
+    "Register/On.json",
+    "Prematch/On.json",
+    "Pre/On.json",
+    "Sports/On.json",
+    "Book/On.json",
+    "Scheduled/On.json",
+)
+
 # 選項位置 p → selection
 POSITION_MAP: dict[int, str] = {
     1: "home",
@@ -85,12 +101,14 @@ def _parse_kdt(kdt: Any) -> tuple[str, str]:
         return "", ""
 
 
-def _guess_selection(market: str, position: int, n_selections: int) -> str:
+def _guess_selection(market: str, position: int, n_selections: int, *, sport: str = "nba") -> str:
     if market == "total":
         if position in (4, 5):
             return POSITION_MAP.get(position, "over" if position == 4 else "under")
         return "over" if position == 1 else "under"
     if market == "margin":
+        if sport == "nba" and 1 <= position <= len(NBA_MARGIN_BY_POS):
+            return NBA_MARGIN_BY_POS[position - 1]
         return POSITION_MAP.get(position, f"band_{position}")
     if market == "moneyline" and n_selections == 2:
         return "home" if position == 1 else "away"
@@ -147,7 +165,7 @@ def _parse_ms_rows(
                         handicap = float(handicap)
                     except (TypeError, ValueError):
                         handicap = None
-                selection = _guess_selection(market, pos, n_sel)
+                selection = _guess_selection(market, pos, n_sel, sport=sport)
                 rows.append(
                     {
                         "source": source,
@@ -207,17 +225,35 @@ class SportLotteryClient:
                 return payload["liveOn"] or []
         return []
 
-    def fetch_live_raw(self) -> list[dict[str, Any]]:
-        return self._unwrap_events(self._get_json("Live/On.json"))
+    def _get_json_path(self, path: str) -> Any:
+        return self._get_json(path)
 
     def fetch_register_raw(self) -> list[dict[str, Any]]:
+        """受注中（賽前）賽事；Register/On.json 404 時嘗試後備路徑。"""
+        for path in REGISTER_BLOB_PATHS:
+            try:
+                events = self._unwrap_events(self._get_json(path))
+                if events:
+                    logger.info("運彩受注 Blob 命中：%s（%d 場）", path, len(events))
+                    return events
+            except requests.HTTPError as exc:
+                if exc.response is not None and exc.response.status_code == 404:
+                    logger.debug("Blob 404: %s", path)
+                    continue
+                raise
+            except Exception as exc:
+                logger.debug("Blob 失敗 %s: %s", path, exc)
+        return []
+
+    def fetch_live_raw(self) -> list[dict[str, Any]]:
         try:
-            return self._unwrap_events(self._get_json("Register/On.json"))
-        except requests.HTTPError as exc:
-            if exc.response is not None and exc.response.status_code == 404:
-                logger.debug("Register/On.json 不可用（404），僅使用 Live")
-                return []
-            raise
+            events = self._unwrap_events(self._get_json("Live/On.json"))
+            if events:
+                logger.info("運彩 Live Blob：%d 場", len(events))
+            return events
+        except Exception as exc:
+            logger.warning("Live/On.json 失敗: %s", exc)
+            return []
 
     def parse_events(
         self,
@@ -268,20 +304,28 @@ class SportLotteryClient:
         self,
         sports: set[str] | None = None,
     ) -> pd.DataFrame:
-        """合併 Live + Register。"""
-        frames = [self.fetch_live(sports), self.fetch_register(sports)]
-        frames = [f for f in frames if not f.empty]
+        """合併 Live + Register（賽前受注）。"""
+        live_ev = self.fetch_live_raw()
+        reg_ev = self.fetch_register_raw()
+        frames: list[pd.DataFrame] = []
+        if live_ev:
+            frames.append(
+                self.parse_events(live_ev, source="sportslottery_live", odds_phase="live", sports=sports)
+            )
+        if reg_ev:
+            frames.append(
+                self.parse_events(reg_ev, source="sportslottery_register", odds_phase="register", sports=sports)
+            )
         if not frames:
+            logger.warning(
+                "台灣運彩 Blob 無資料（Live=[]、Register 後備皆空）。"
+                "賽前盤口可能僅在官網 SPA 提供；請設定 JBOT_TOKEN 或執行 watch 同步。"
+            )
             return pd.DataFrame(columns=STANDARD_ODDS_COLUMNS)
+        if len(frames) == 1:
+            return frames[0]
         return pd.concat(frames, ignore_index=True).drop_duplicates(
-            subset=[
-                "event_id",
-                "market",
-                "selection",
-                "handicap",
-                "odds_phase",
-                "odds",
-            ],
+            subset=["event_id", "market", "selection", "handicap", "odds_phase", "odds"],
             keep="last",
         )
 

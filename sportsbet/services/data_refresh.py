@@ -256,6 +256,22 @@ def rebuild_predictions_from_forecasts(
                         pred_total=float(pred_total) if pred_total is not None else None,
                     )
                 prob = calibrate_spread_prob(raw, row_sport)  # type: ignore[arg-type]
+            elif market == "margin":
+                margin_val = row["predicted_margin"]
+                pred_total = row["predicted_total"]
+                if margin_val is None:
+                    continue
+                from sportsbet.models.margin_bands import prob_margin_selection
+
+                prob_raw = prob_margin_selection(
+                    sel,
+                    float(margin_val),
+                    sport=row_sport,
+                    pred_total=float(pred_total) if pred_total is not None else None,
+                )
+                if prob_raw is None:
+                    continue
+                prob = float(prob_raw)
             else:
                 continue
             prob = max(0.001, min(0.999, prob))

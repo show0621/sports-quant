@@ -227,6 +227,14 @@ class PredictionService:
             totals["sportslottery_rows"] += int(part.get("sportslottery_rows", 0))
             totals["playsport_fallback"] += int(part.get("playsport_fallback", 0))
             totals["days"] += 1
+        from sportsbet import config
+
+        if config.jbot_configured():
+            from sportsbet.data.jbot_odds_sync import sync_jbot_upcoming_odds
+
+            totals["jbot_upcoming"] = sync_jbot_upcoming_odds(
+                self.db, sport, days_ahead=days_ahead,
+            )
         self.db.set_backtest_sync_meta(sport, "tw_odds_synced_at", today.isoformat())
         return totals
 
@@ -407,7 +415,9 @@ class PredictionService:
         """現在/未來賽事預測總表。"""
         from sportsbet.data.team_names import team_bilingual
         from sportsbet.ui.matchup_display import format_match_datetime, taipei_match_date
-        from sportsbet.ui.odds_display import summarize_game_odds
+        from sportsbet.ui.odds_display import build_game_market_picks, summarize_game_odds
+        from sportsbet.models.forecast import forecast_pick_dict
+        from sportsbet import config
 
         rows = []
         today = date.today().isoformat()
@@ -418,6 +428,23 @@ class PredictionService:
             h_en, h_zh = team_bilingual(f.home_team, f.sport)
             a_en, a_zh = team_bilingual(f.away_team, f.sport)
             odds = summarize_game_odds(self.db, f.game_id)
+            picks = build_game_market_picks(
+                forecast_pick_dict(f),
+                odds,
+                f.sport,
+                home_team=f.home_team,
+                away_team=f.away_team,
+            )
+            rec_parts: list[str] = []
+            for key, label in [
+                ("moneyline", "勝負"),
+                ("spread", "讓分"),
+                ("margin", "勝分差"),
+                ("total", "大小"),
+            ]:
+                p = picks.get(key)
+                if p and p.ev is not None and p.ev >= config.MIN_EV_THRESHOLD:
+                    rec_parts.append(f"{label}:{p.selection_label}(EV {p.ev:+.1%})")
             rows.append(
                 {
                     "區間": "今日" if tw_date == today else "未來",
@@ -440,6 +467,8 @@ class PredictionService:
                     "讓分(主)": odds.get("spread_home_line"),
                     "主勝賠率": odds.get("ml_home"),
                     "客勝賠率": odds.get("ml_away"),
+                    "勝分差檔數": len(odds.get("margin_odds") or {}),
+                    "推薦下注": " · ".join(rec_parts) if rec_parts else "—",
                     "預估分差": f.predicted_margin,
                     "狀態": f.status,
                 }

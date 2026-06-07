@@ -177,7 +177,7 @@ ML_PROB_SHRINK: dict[str, float] = {
 }
 # 資金回測：MLB 勝率模型與實際相關性低，暫不納入 moneyline
 BANKROLL_MARKETS: dict[str, tuple[str, ...]] = {
-    "nba": ("moneyline", "total", "spread"),
+    "nba": ("moneyline", "total", "spread", "margin"),
     "mlb": ("total",),
 }
 BOXSCORE_REGULAR_DAYS_BACK = int(os.getenv("BOXSCORE_REGULAR_DAYS_BACK", "365"))

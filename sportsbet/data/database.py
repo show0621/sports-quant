@@ -1311,7 +1311,7 @@ class SportsDatabase:
     def get_backtest_frame(self, sport: Sport) -> pd.DataFrame:
         """已結束賽事 + 預測機率 + 賠率，供評估模組使用（僅模型 predictions）。"""
         with self.connection() as conn:
-            return pd.read_sql_query(
+            df = pd.read_sql_query(
                 """
                 SELECT g.id AS game_id, g.match_date, g.home_team, g.away_team,
                        g.home_score, g.away_score,
@@ -1349,6 +1349,28 @@ class SportsDatabase:
                 conn,
                 params=(sport,),
             )
+        if df.empty or "market" not in df.columns:
+            return df
+        margin_mask = df["market"] == "margin"
+        if not margin_mask.any():
+            return df
+        from sportsbet.models.margin_bands import bands_for_sport, margin_band_hit
+
+        band_map = {b.key: b for b in bands_for_sport(sport)}
+
+        def _margin_won(row: pd.Series) -> float | None:
+            band = band_map.get(str(row["selection"]))
+            if band is None:
+                return None
+            hit = margin_band_hit(
+                band.side, band.lo, band.hi,
+                int(row["home_score"]), int(row["away_score"]),
+            )
+            return 1.0 if hit else 0.0
+
+        df = df.copy()
+        df.loc[margin_mask, "won"] = df.loc[margin_mask].apply(_margin_won, axis=1)
+        return df
 
     def get_backtest_sync_meta(self, sport: Sport, meta_key: str) -> str | None:
         with self.connection() as conn:

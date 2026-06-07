@@ -48,7 +48,7 @@ def _pct(v: float | None) -> str:
 
 
 # 遞增以在 Streamlit Cloud 部署後清掉舊版 SportsDatabase 快取
-_DB_CACHE_VERSION = 8
+_DB_CACHE_VERSION = 9
 
 
 def _schedule_coverage(db: SportsDatabase, sport: str) -> dict[str, object]:
@@ -521,6 +521,48 @@ def page_model_health(sport: str) -> None:
     df_ml = df_ml.copy()
     df_ml["model_prob"] = df_ml["model_prob"].astype(float).clip(0.0, 1.0)
 
+    from sportsbet.evaluation.market_backtest import build_market_backtest_table
+
+    st.subheader("分玩法回測（勝率 / EV / ROI）")
+    mkt_table = build_market_backtest_table(df)
+    if not mkt_table.empty:
+        show_mkt = mkt_table.copy()
+        for col in ("準確率", "正EV勝率", "ROI(正EV)"):
+            if col in show_mkt.columns:
+                show_mkt[col] = show_mkt[col].map(
+                    lambda x: f"{x:.1%}" if pd.notna(x) else "—"
+                )
+        for col in ("Brier",):
+            if col in show_mkt.columns:
+                show_mkt[col] = show_mkt[col].map(
+                    lambda x: f"{x:.4f}" if pd.notna(x) else "—"
+                )
+        for col in ("平均EV",):
+            if col in show_mkt.columns:
+                show_mkt[col] = show_mkt[col].map(
+                    lambda x: f"{x:+.2%}" if pd.notna(x) else "—"
+                )
+        st.dataframe(
+            show_mkt.drop(columns=["market"], errors="ignore"),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    mkt_tabs = st.tabs(["不讓分", "讓分", "大小分", "勝分差"])
+    for tab, market in zip(mkt_tabs, ["moneyline", "spread", "total", "margin"], strict=True):
+        with tab:
+            sub = df[df["market"] == market].copy()
+            if sub.empty:
+                st.info(f"尚無 {market} 回測資料（需歷史賠率 + predictions）。")
+                continue
+            sub["model_prob"] = sub["model_prob"].astype(float).clip(0.0, 1.0)
+            rep = build_ev_backtest_report(sub)
+            st.write(rep.summary_text)
+            c1, c2, c3 = st.columns(3)
+            c1.metric("樣本數", len(sub))
+            c2.metric("正 EV ROI", f"{rep.roi_taken:+.2%}" if rep.n_positive_ev else "—")
+            c3.metric("正 EV 筆數", rep.n_positive_ev)
+
     ev_rep = build_ev_backtest_report(df_ml)
     st.subheader("期望值回測（EV Validation）")
     st.write(ev_rep.summary_text)
@@ -627,7 +669,7 @@ def page_bankroll(sport: str) -> None:
     fp = _market_data_fingerprint(db, sport)
 
     allowed = config.BANKROLL_MARKETS.get(sport, ("moneyline", "total", "spread"))
-    market_opts = {"全部": "all", "勝負": "moneyline", "大小分": "total", "讓分": "spread"}
+    market_opts = {"全部": "all", "勝負": "moneyline", "大小分": "total", "讓分": "spread", "勝分差": "margin"}
     if sport == "mlb" and "moneyline" not in allowed:
         st.info("MLB 勝率模型校準不足，回測預設僅含大小盤；勝負盤可手動篩選檢視。")
     market_label = st.selectbox("盤口篩選", list(market_opts.keys()), index=0)
