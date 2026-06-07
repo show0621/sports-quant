@@ -28,6 +28,7 @@ Sport = Literal["nba", "mlb"]
 
 USER_AGENT = "sports-quant/1.0 (+https://github.com/show0621/sports-quant)"
 BASE_URL = "https://www.playsport.cc/gamesData/teams"
+PREDICT_URL = "https://www.playsport.cc/predict/scale"
 
 # allianceid：3=NBA, 1=MLB（玩運彩 gamesData/teams 分站）
 ALLIANCE_ID: dict[str, int] = {"nba": 3, "mlb": 1}
@@ -40,6 +41,9 @@ _STAT_RANGE_RE = re.compile(
 _SPREAD_RE = re.compile(r"([+-]?\d+\.?\d*)\s*分")
 _TOTAL_RE = re.compile(r"([大小])\s*(\d+\.?\d*)")
 _GAME_ID_RE = re.compile(r"gameid=(\d+)")
+_BANK_SPREAD_RE = re.compile(r"([主客])\s*([+-]?\d+\.?\d*)\s*,?\s*([\d.]+)")
+_BANK_ML_RE = re.compile(r"[主客]\s*([\d.]+)")
+_BANK_TOTAL_RE = re.compile(r"([大小])\s*([\d.]+)\s*,?\s*([\d.]+)")
 
 
 def _sport_team_names(sport: Sport) -> list[str]:
@@ -91,6 +95,234 @@ class PlaySportScraper:
         resp.encoding = resp.apparent_encoding or "utf-8"
         time.sleep(self.delay_sec)
         return resp.text
+
+    def _get_predict(self, params: dict[str, Any]) -> str:
+        resp = self._session.get(PREDICT_URL, params=params, timeout=self.timeout)
+        resp.raise_for_status()
+        resp.encoding = resp.apparent_encoding or "utf-8"
+        time.sleep(self.delay_sec)
+        return resp.text
+
+    @staticmethod
+    def _parse_bank_spread(text: str) -> tuple[float, float] | None:
+        m = _BANK_SPREAD_RE.search(text or "")
+        if not m:
+            return None
+        return float(m.group(2)), float(m.group(3))
+
+    @staticmethod
+    def _parse_bank_moneyline(text: str) -> float | None:
+        m = _BANK_ML_RE.search(text or "")
+        return float(m.group(1)) if m else None
+
+    @staticmethod
+    def _parse_bank_total(text: str) -> tuple[str, float, float] | None:
+        m = _BANK_TOTAL_RE.search(text or "")
+        if not m:
+            return None
+        side = "over" if m.group(1) == "大" else "under"
+        return side, float(m.group(2)), float(m.group(3))
+
+    def fetch_predict_scale(
+        self,
+        sport: Sport,
+        match_date: str,
+    ) -> pd.DataFrame:
+        """
+        玩運彩當日賽前盤口（predict/scale）。
+        通常僅在比賽當日才會顯示，供與官網交叉比對或官網失敗時備援。
+        """
+        aid = ALLIANCE_ID.get(sport)
+        if aid is None:
+            return pd.DataFrame()
+
+        gametime = str(match_date).replace("-", "")
+        html = self._get_predict({"allianceid": aid, "gametime": gametime, "sid": 1})
+        soup = BeautifulSoup(html, "html.parser")
+
+        rows_out: list[dict[str, Any]] = []
+        away_row: dict[str, str] | None = None
+
+        def _flush_pair(home_row: dict[str, str]) -> None:
+            nonlocal away_row
+            if not away_row:
+                return
+            away_team = normalize_team_name(away_row.get("team", ""), sport)
+            home_team = normalize_team_name(home_row.get("team", ""), sport)
+            from sportsbet.data.team_names import team_belongs_to_sport
+
+            if not team_belongs_to_sport(away_team, sport) or not team_belongs_to_sport(home_team, sport):
+                away_row = None
+                return
+
+            spread_away = self._parse_bank_spread(away_row.get("spread", ""))
+            spread_home = self._parse_bank_spread(home_row.get("spread", ""))
+            ml_away = self._parse_bank_moneyline(away_row.get("moneyline", ""))
+            ml_home = self._parse_bank_moneyline(home_row.get("moneyline", ""))
+            total_away = self._parse_bank_total(away_row.get("total", ""))
+            total_home = self._parse_bank_total(home_row.get("total", ""))
+
+            rows_out.append(
+                {
+                    "sport": sport,
+                    "match_date": match_date,
+                    "away_team": away_team,
+                    "home_team": home_team,
+                    "spread_away_line": spread_away[0] if spread_away else None,
+                    "spread_away_odds": spread_away[1] if spread_away else None,
+                    "spread_home_line": spread_home[0] if spread_home else None,
+                    "spread_home_odds": spread_home[1] if spread_home else None,
+                    "moneyline_away": ml_away,
+                    "moneyline_home": ml_home,
+                    "total_line": (
+                        total_away[1]
+                        if total_away
+                        else (total_home[1] if total_home else None)
+                    ),
+                    "total_over_odds": total_away[2] if total_away and total_away[0] == "over" else None,
+                    "total_under_odds": total_home[2] if total_home and total_home[0] == "under" else None,
+                    "source": "playsport_predict",
+                }
+            )
+            away_row = None
+
+        for tr in soup.find_all("tr"):
+            team_td = tr.find("td", class_="td-teaminfo")
+            if not team_td:
+                continue
+            team_name = team_td.get_text(strip=True)
+            if not team_name:
+                continue
+
+            row_data = {
+                "team": team_name,
+                "spread": (
+                    tr.find("td", class_="td-bank-bet01").get_text(" ", strip=True)
+                    if tr.find("td", class_="td-bank-bet01")
+                    else ""
+                ),
+                "moneyline": (
+                    tr.find("td", class_="td-bank-bet03").get_text(" ", strip=True)
+                    if tr.find("td", class_="td-bank-bet03")
+                    else ""
+                ),
+                "total": (
+                    tr.find("td", class_="td-bank-bet02").get_text(" ", strip=True)
+                    if tr.find("td", class_="td-bank-bet02")
+                    else ""
+                ),
+            }
+
+            if tr.find("td", class_="td-gameinfo"):
+                if away_row:
+                    logger.debug("playsport predict: 略過不完整對戰列")
+                away_row = row_data
+            elif away_row:
+                _flush_pair(row_data)
+
+        return pd.DataFrame(rows_out)
+
+    def sync_predict_scale_to_database(
+        self,
+        db: SportsDatabase,
+        sport: Sport,
+        match_date: str,
+    ) -> int:
+        """寫入當日 predict/scale 盤口（bookmaker=playsport）。"""
+        df = self.fetch_predict_scale(sport, match_date)
+        if df.empty:
+            logger.info("playsport predict %s %s：無當日盤口", sport, match_date)
+            return 0
+
+        games = db.get_games(sport, match_date)
+        if games.empty:
+            logger.info("playsport predict %s %s：DB 無賽程", sport, match_date)
+            return 0
+
+        n = 0
+        for _, row in df.iterrows():
+            home = str(row["home_team"])
+            away = str(row["away_team"])
+            gid = None
+            for gh, ga in ((home, away), (away, home)):
+                hit = games[(games["home_team"] == gh) & (games["away_team"] == ga)]
+                if not hit.empty:
+                    gid = int(hit.iloc[0]["id"])
+                    home, away = gh, ga
+                    break
+            if gid is None:
+                logger.debug("playsport predict 對不到 DB 賽事: %s vs %s", away, home)
+                continue
+
+            if row.get("spread_home_line") is not None and row.get("spread_home_odds") is not None:
+                db.upsert_odds(
+                    gid,
+                    "spread",
+                    "home",
+                    float(row["spread_home_odds"]),
+                    handicap=float(row["spread_home_line"]),
+                    bookmaker="playsport",
+                    odds_phase="prematch",
+                )
+                n += 1
+            if row.get("spread_away_line") is not None and row.get("spread_away_odds") is not None:
+                db.upsert_odds(
+                    gid,
+                    "spread",
+                    "away",
+                    float(row["spread_away_odds"]),
+                    handicap=float(row["spread_away_line"]),
+                    bookmaker="playsport",
+                    odds_phase="prematch",
+                )
+                n += 1
+            if row.get("moneyline_home") is not None:
+                db.upsert_odds(
+                    gid,
+                    "moneyline",
+                    "home",
+                    float(row["moneyline_home"]),
+                    bookmaker="playsport",
+                    odds_phase="prematch",
+                )
+                n += 1
+            if row.get("moneyline_away") is not None:
+                db.upsert_odds(
+                    gid,
+                    "moneyline",
+                    "away",
+                    float(row["moneyline_away"]),
+                    bookmaker="playsport",
+                    odds_phase="prematch",
+                )
+                n += 1
+            line = row.get("total_line")
+            if line is not None:
+                if row.get("total_over_odds") is not None:
+                    db.upsert_odds(
+                        gid,
+                        "total",
+                        "over",
+                        float(row["total_over_odds"]),
+                        handicap=float(line),
+                        bookmaker="playsport",
+                        odds_phase="prematch",
+                    )
+                    n += 1
+                if row.get("total_under_odds") is not None:
+                    db.upsert_odds(
+                        gid,
+                        "total",
+                        "under",
+                        float(row["total_under_odds"]),
+                        handicap=float(line),
+                        bookmaker="playsport",
+                        odds_phase="prematch",
+                    )
+                    n += 1
+
+        logger.info("playsport predict sport=%s date=%s rows=%d", sport, match_date, n)
+        return n
 
     def list_team_ids(self, sport: Sport) -> dict[int, str]:
         """NBA/MLB 球隊 teamid → 中文隊名。"""

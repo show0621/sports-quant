@@ -295,7 +295,13 @@ def page_current_future_predictions(sport: str, svc: PredictionService) -> None:
             odds_stats = svc.sync_upcoming_odds(sport, days_ahead=max(days_ahead, max_days))
         st.caption(
             f"新增 {n} 場賽程 · 運彩 {odds_stats.get('sportslottery_rows', 0)} 列 · "
-            f"玩運彩補 {odds_stats.get('playsport_fallback', 0)} 列"
+            f"玩運彩補 {odds_stats.get('playsport_fallback', 0)} 列 · "
+            f"當日比對 {odds_stats.get('playsport_verify', 0)} 列"
+            + (
+                f"（不一致 {odds_stats.get('odds_mismatch', 0)}）"
+                if odds_stats.get("odds_mismatch")
+                else ""
+            )
         )
     if full_recalc_btn:
         with st.spinner("重算今日/未來與全部歷史覆盤（貝氏集成管線）…"):

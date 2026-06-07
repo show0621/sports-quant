@@ -216,20 +216,24 @@ class PredictionService:
         return synced
 
     def sync_upcoming_odds(self, sport: Sport, *, days_ahead: int) -> dict[str, int]:
-        """同步今日起 N 天台灣盤口（官網 SPA / Blob → 玩運彩補缺）。"""
+        """同步今日起 N 天台灣盤口（官網 SPA / Blob；當日玩運彩比對）。"""
         from sportsbet.data.tw_odds_sync import sync_tw_odds_for_date
 
         totals: dict[str, int] = {
             "sportslottery_rows": 0,
             "playsport_fallback": 0,
+            "playsport_verify": 0,
+            "odds_mismatch": 0,
+            "odds_match": 0,
             "days": 0,
         }
         today = date.today()
         for offset in range(days_ahead + 1):
             d = (today + timedelta(days=offset)).isoformat()
             part = sync_tw_odds_for_date(self.db, sport, d, replace=False)
-            totals["sportslottery_rows"] += int(part.get("sportslottery_rows", 0))
-            totals["playsport_fallback"] += int(part.get("playsport_fallback", 0))
+            for key in totals:
+                if key != "days":
+                    totals[key] += int(part.get(key, 0))
             totals["days"] += 1
 
         self.db.set_backtest_sync_meta(sport, "tw_odds_synced_at", today.isoformat())

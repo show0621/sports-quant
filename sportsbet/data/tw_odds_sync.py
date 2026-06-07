@@ -1,8 +1,10 @@
 """
-台灣運彩賠率同步：① 官網 SPA（Playwright）② Blob 場中 ③ 玩運彩補缺。
+台灣運彩賠率同步：① 官網 SPA（Playwright）② Blob 場中 ③ 玩運彩補缺／當日比對。
 
-官網 event 例：
-/sportsbook/sport/籃球/美國/美國職籃/34801.1/event/3472877.1
+策略：
+- **未來賽事**：官網有盤即寫入，不等待玩運彩（玩運彩通常賽當日才有）。
+- **比賽當日**：同步玩運彩 predict/scale，與官網交叉比對；官網失敗時以玩運彩備援。
+- **過去賽事**：官網缺漏時以玩運彩歷史頁補缺。
 """
 from __future__ import annotations
 
@@ -19,8 +21,11 @@ logger = logging.getLogger(__name__)
 
 Sport = str
 TW_BOOKMAKER = "sportslottery"
+PS_BOOKMAKER = "playsport"
 CORE_MARKETS = ("moneyline", "spread", "total")
 TW_ODDS_BOOKMAKERS = ("sportslottery", "playsport", "tw_standard")
+ODDS_COMPARE_TOLERANCE = 0.08
+LINE_COMPARE_TOLERANCE = 0.26
 _web_odds_cache: dict[str, pd.DataFrame] = {}
 
 
@@ -117,14 +122,117 @@ def prematch_odds_source_hint() -> str:
     """Streamlit / 日誌用：說明賽前盤口來源。"""
     if config.SPORTSLOTTERY_PLAYWRIGHT_ENABLED:
         return (
-            "賽前盤口：台灣運彩官網 SPA（Playwright）。"
+            "賽前盤口：台灣運彩官網 SPA（Playwright）；"
+            "比賽當日另抓玩運彩 predict/scale 交叉比對，官網失敗時備援。"
             "若 Cloud 仍空白，請在本機執行 "
             "`python main.py sync --mode daily --sport nba` 或 watch 後推送 DB。"
         )
     return (
         "請啟用 SPORTSLOTTERY_PLAYWRIGHT_ENABLED=true，"
-        "由官網 event 頁抓取賽前盤口；玩運彩僅補官網缺漏之歷史場次。"
+        "由官網 event 頁抓取賽前盤口；玩運彩僅於比賽當日比對或官網缺漏時備援。"
     )
+
+
+def _odds_snapshot(
+    db: SportsDatabase,
+    game_id: int,
+    bookmaker: str,
+) -> dict[str, float]:
+    """擷取單一 bookmaker 的核心盤口（moneyline / spread / total）。"""
+    raw = db.get_game_odds(game_id)
+    if raw.empty:
+        return {}
+    sub = raw[raw["bookmaker"].astype(str) == bookmaker]
+    if sub.empty:
+        return {}
+    out: dict[str, float] = {}
+    for _, r in sub.iterrows():
+        market = str(r["market"])
+        sel = str(r["selection"])
+        key = f"{market}:{sel}"
+        if market == "spread" and pd.notna(r.get("handicap")):
+            out[f"spread_line:{sel}"] = float(r["handicap"])
+        if market == "total" and pd.notna(r.get("handicap")):
+            out["total_line"] = float(r["handicap"])
+        if pd.notna(r.get("odds")):
+            out[key] = float(r["odds"])
+    return out
+
+
+def compare_tw_odds_sources(db: SportsDatabase, game_id: int) -> list[str]:
+    """官網 vs 玩運彩核心盤口比對，回傳不一致訊息。"""
+    sl = _odds_snapshot(db, game_id, TW_BOOKMAKER)
+    ps = _odds_snapshot(db, game_id, PS_BOOKMAKER)
+    if not sl or not ps:
+        return []
+
+    issues: list[str] = []
+    for sel in ("home", "away"):
+        k = f"moneyline:{sel}"
+        if k in sl and k in ps and abs(sl[k] - ps[k]) > ODDS_COMPARE_TOLERANCE:
+            issues.append(f"moneyline {sel}: 官網 {sl[k]:.2f} vs 玩運彩 {ps[k]:.2f}")
+
+    for sel in ("home", "away"):
+        lk = f"spread_line:{sel}"
+        ok = f"spread:{sel}"
+        if lk in sl and lk in ps and abs(sl[lk] - ps[lk]) > LINE_COMPARE_TOLERANCE:
+            issues.append(f"spread {sel} 讓分: 官網 {sl[lk]:+.1f} vs 玩運彩 {ps[lk]:+.1f}")
+        if ok in sl and ok in ps and abs(sl[ok] - ps[ok]) > ODDS_COMPARE_TOLERANCE:
+            issues.append(f"spread {sel} 賠率: 官網 {sl[ok]:.2f} vs 玩運彩 {ps[ok]:.2f}")
+
+    if "total_line" in sl and "total_line" in ps and abs(sl["total_line"] - ps["total_line"]) > LINE_COMPARE_TOLERANCE:
+        issues.append(f"大小分線: 官網 {sl['total_line']:.1f} vs 玩運彩 {ps['total_line']:.1f}")
+    for sel in ("over", "under"):
+        k = f"total:{sel}"
+        if k in sl and k in ps and abs(sl[k] - ps[k]) > ODDS_COMPARE_TOLERANCE:
+            issues.append(f"total {sel}: 官網 {sl[k]:.2f} vs 玩運彩 {ps[k]:.2f}")
+
+    return issues
+
+
+def sync_playsport_game_day(
+    db: SportsDatabase,
+    sport: Sport,
+    match_date: str,
+) -> dict[str, int]:
+    """
+    比賽當日：抓玩運彩 predict/scale 寫入 DB，並與官網比對。
+    官網缺漏時，UI 會透過 get_preferred_game_odds 自動改用 playsport。
+    """
+    from sportsbet.data.playsport_scraper import PlaySportScraper
+
+    out = {"playsport_rows": 0, "odds_mismatch": 0, "odds_match": 0}
+    if not config.PLAYSPORT_ENABLED:
+        return out
+
+    scraper = PlaySportScraper()
+    out["playsport_rows"] = scraper.sync_predict_scale_to_database(db, sport, match_date)
+
+    games = db.get_games(sport, match_date)
+    for _, g in games.iterrows():
+        gid = int(g["id"])
+        if not _game_has_market_from_bookmaker(db, gid, PS_BOOKMAKER):
+            continue
+        if not _game_has_market_from_bookmaker(db, gid, TW_BOOKMAKER):
+            logger.info(
+                "玩運彩備援 game_id=%d %s vs %s（官網尚無盤口）",
+                gid, g["away_team"], g["home_team"],
+            )
+            continue
+        issues = compare_tw_odds_sources(db, gid)
+        if issues:
+            out["odds_mismatch"] += 1
+            logger.warning(
+                "盤口不一致 game_id=%d %s vs %s: %s",
+                gid, g["away_team"], g["home_team"], "; ".join(issues),
+            )
+        else:
+            out["odds_match"] += 1
+            logger.info(
+                "盤口一致 game_id=%d %s vs %s",
+                gid, g["away_team"], g["home_team"],
+            )
+    return out
 
 
 def _match_game_id(
@@ -260,7 +368,7 @@ def fill_playsport_gaps_for_date(
     *,
     max_teams: int | None = None,
 ) -> int:
-    """玩運彩補缺：僅當官網（sportslottery）尚無完整盤口時才抓。"""
+    """玩運彩歷史頁補缺：僅用於已結束賽事，官網尚無盤口時才抓。"""
     if not config.PLAYSPORT_ENABLED:
         return 0
 
@@ -325,17 +433,34 @@ def sync_tw_odds_for_date(
     playsport_fallback: bool | None = None,
 ) -> dict[str, int]:
     """
-    單日台灣盤口：① 官網/Blob ② 缺漏時玩運彩（官網有則不抓玩運彩）。
-    DB 已有完整 sportslottery 核心盤且未過期時跳過官網抓取。
+    單日台灣盤口：
+    ① 官網/Blob（未來賽事有官網即寫入，不等玩運彩）
+    ② 比賽當日：玩運彩 predict/scale 比對＋備援
+    ③ 過去賽事：官網缺漏時玩運彩歷史補缺
     """
-    out = {"sportslottery_rows": 0, "playsport_fallback": 0, "sportslottery_web": 0, "cached": 0}
+    today = date.today().isoformat()
+    is_game_day = match_date == today
+    is_future = match_date > today
+
+    out = {
+        "sportslottery_rows": 0,
+        "playsport_fallback": 0,
+        "playsport_verify": 0,
+        "odds_mismatch": 0,
+        "odds_match": 0,
+        "sportslottery_web": 0,
+        "cached": 0,
+    }
+
+    skip_official = False
     if not replace and _date_odds_fresh_in_db(db, sport, match_date):
         logger.info(
             "盤口 %s %s 已快取於 DB（<%d 小時），跳過官網抓取",
             sport, match_date, config.ODDS_DB_FRESH_HOURS,
         )
         out["cached"] = 1
-    else:
+        skip_official = True
+    if not skip_official:
         try:
             odds_df = fetch_sportslottery_odds_df(sport)
             if not odds_df.empty and "match_date" in odds_df.columns:
@@ -347,21 +472,33 @@ def sync_tw_odds_for_date(
             logger.warning("台灣運彩抓取失敗 %s %s: %s", sport, match_date, exc)
 
     use_ps = playsport_fallback if playsport_fallback is not None else config.PLAYSPORT_ENABLED
-    if use_ps:
-        games = db.get_games(sport, match_date)
-        need_ps = [
-            int(r["id"])
-            for _, r in games.iterrows()
-            if not _game_has_market_from_bookmaker(db, int(r["id"]), TW_BOOKMAKER)
-            and not _game_has_tw_core_markets(db, int(r["id"]))
-        ] if not games.empty else []
-        if need_ps:
-            out["playsport_fallback"] = fill_playsport_gaps_for_date(
-                db,
-                sport,
-                match_date,
-                max_teams=config.PLAYSPORT_MAX_TEAMS_PER_SYNC,
-            )
+    if not use_ps:
+        return out
+
+    if is_game_day:
+        ps_stats = sync_playsport_game_day(db, sport, match_date)
+        out["playsport_verify"] = ps_stats.get("playsport_rows", 0)
+        out["odds_mismatch"] = ps_stats.get("odds_mismatch", 0)
+        out["odds_match"] = ps_stats.get("odds_match", 0)
+        return out
+
+    if is_future:
+        logger.debug("未來賽事 %s %s：跳過玩運彩（僅用官網賽前盤）", sport, match_date)
+        return out
+
+    games = db.get_games(sport, match_date)
+    need_ps = [
+        int(r["id"])
+        for _, r in games.iterrows()
+        if not _game_has_market_from_bookmaker(db, int(r["id"]), TW_BOOKMAKER)
+    ] if not games.empty else []
+    if need_ps:
+        out["playsport_fallback"] = fill_playsport_gaps_for_date(
+            db,
+            sport,
+            match_date,
+            max_teams=config.PLAYSPORT_MAX_TEAMS_PER_SYNC,
+        )
 
     return out
 
@@ -385,14 +522,24 @@ def sync_tw_odds_recent(
     from datetime import timedelta
 
     span = days if days is not None else config.HISTORICAL_BLOB_ODDS_DAYS + 7
-    totals = {"sportslottery_rows": 0, "playsport_fallback": 0, "days": 0}
+    totals = {
+        "sportslottery_rows": 0,
+        "playsport_fallback": 0,
+        "playsport_verify": 0,
+        "odds_mismatch": 0,
+        "odds_match": 0,
+        "days": 0,
+    }
     for offset in range(-3, span + 1):
         d = (date.today() + timedelta(days=offset)).isoformat()
         if db.get_games(sport, d).empty and offset > 0:
             continue
         part = sync_tw_odds_for_date(db, sport, d, replace=False)
-        totals["sportslottery_rows"] += part["sportslottery_rows"]
-        totals["playsport_fallback"] += part["playsport_fallback"]
+        totals["sportslottery_rows"] += part.get("sportslottery_rows", 0)
+        totals["playsport_fallback"] += part.get("playsport_fallback", 0)
+        totals["playsport_verify"] += part.get("playsport_verify", 0)
+        totals["odds_mismatch"] += part.get("odds_mismatch", 0)
+        totals["odds_match"] += part.get("odds_match", 0)
         totals["days"] += 1
     db.set_backtest_sync_meta(sport, "tw_odds_synced_at", date.today().isoformat())
     return totals
