@@ -268,9 +268,13 @@ def page_current_future_predictions(sport: str, svc: PredictionService) -> None:
             )
             st.rerun()
     if sync_btn:
-        with st.spinner("向 ESPN 補抓賽程…"):
+        with st.spinner("向 ESPN 補抓賽程並同步台灣盤口…"):
             n = svc.ensure_schedule_sync(sport, days_ahead=max(days_ahead, max_days))
-        st.caption(f"新增 {n} 場賽程")
+            odds_stats = svc.sync_upcoming_odds(sport, days_ahead=max(days_ahead, max_days))
+        st.caption(
+            f"新增 {n} 場賽程 · 運彩 {odds_stats.get('sportslottery_rows', 0)} 列 · "
+            f"玩運彩補 {odds_stats.get('playsport_fallback', 0)} 列"
+        )
     if full_recalc_btn:
         with st.spinner("重算今日/未來與全部歷史覆盤（貝氏集成管線）…"):
             stats = _recompute_all_forecasts(svc, sport, days_ahead)
@@ -281,6 +285,8 @@ def page_current_future_predictions(sport: str, svc: PredictionService) -> None:
         st.rerun()
     if recalc_btn or sync_btn:
         with st.spinner("計算中…"):
+            if recalc_btn and not sync_btn:
+                svc.sync_upcoming_odds(sport, days_ahead=days_ahead)
             svc.run_upcoming(sport, days_ahead=days_ahead)
         st.success("已更新預測紀錄")
         st.rerun()
