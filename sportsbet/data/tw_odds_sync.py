@@ -21,10 +21,11 @@ Sport = str
 TW_BOOKMAKER = "sportslottery"
 CORE_MARKETS = ("moneyline", "spread", "total")
 TW_ODDS_BOOKMAKERS = ("sportslottery", "playsport", "tw_standard")
+_web_odds_cache: dict[str, pd.DataFrame] = {}
 
 
 def _resolve_playsport_team_id(
-    name_to_id: dict[int, str],
+    name_to_id: dict[str, int],
     team: str,
     sport: Sport,
 ) -> int | None:
@@ -39,13 +40,13 @@ def _resolve_playsport_team_id(
         if c and c not in candidates:
             candidates.append(c)
 
-    for tid, ps_name in name_to_id.items():
+    for ps_name, tid in name_to_id.items():
         if ps_name in candidates:
             return int(tid)
 
     en_last = en.split()[-1].lower() if en else ""
-    for tid, ps_name in name_to_id.items():
-        ps_lower = ps_name.lower()
+    for ps_name, tid in name_to_id.items():
+        ps_lower = str(ps_name).lower()
         if en_last and en_last in ps_lower:
             return int(tid)
         if zh and (zh in ps_name or ps_name in zh):
@@ -188,7 +189,9 @@ def fetch_sportslottery_odds_df(sport: Sport) -> pd.DataFrame:
     if config.SPORTSLOTTERY_PLAYWRIGHT_ENABLED:
         from sportsbet.data.sportslottery_web import fetch_web_odds_df
 
-        web_df = fetch_web_odds_df(sport)
+        if sport not in _web_odds_cache:
+            _web_odds_cache[sport] = fetch_web_odds_df(sport)
+        web_df = _web_odds_cache[sport]
         if not web_df.empty:
             frames.append(web_df)
 
