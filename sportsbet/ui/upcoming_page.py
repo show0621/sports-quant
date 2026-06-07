@@ -12,6 +12,7 @@ from sportsbet.services.prediction_service import PredictionService
 from sportsbet.ui.matchup_display import format_match_datetime, render_matchup_header, taipei_match_date
 from sportsbet.ui.model_methodology import render_forecast_pipeline, render_methodology_overview
 from sportsbet.ui.odds_display import render_odds_panel
+from sportsbet.ui.statshub_panel import render_statshub_panel
 
 
 def _load_upcoming_forecasts(svc: PredictionService, sport: str, days_ahead: int) -> list[GameForecast]:
@@ -219,6 +220,14 @@ def _render_forecast_card(
 
         if sport == "nba":
             _render_h2h_box_context(fc, sport, svc)
+            render_statshub_panel(
+                svc.db,
+                sport,
+                getattr(fc, "game_id", None),
+                home_team=getattr(fc, "home_team", ""),
+                away_team=getattr(fc, "away_team", ""),
+                match_date=str(getattr(fc, "match_date", ""))[:10],
+            )
 
         detail = team_detail_dataframe(fc).copy()
         pct_cols = [

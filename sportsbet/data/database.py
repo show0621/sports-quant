@@ -274,6 +274,14 @@ CREATE TABLE IF NOT EXISTS member_consensus (
     FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_member_consensus_date ON member_consensus(sport, match_date);
+
+CREATE TABLE IF NOT EXISTS statshub_snapshots (
+    game_id INTEGER PRIMARY KEY,
+    sportradar_match_id TEXT,
+    payload_json TEXT NOT NULL,
+    synced_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE
+);
 """
 
 _MIGRATION_COLUMNS = [
@@ -302,6 +310,7 @@ _MIGRATION_COLUMNS = [
     ("games", "clock", "TEXT"),
     ("games", "status_detail", "TEXT"),
     ("games", "espn_event_id", "TEXT"),
+    ("games", "sportradar_match_id", "TEXT"),
 ]
 
 
@@ -358,6 +367,8 @@ class SportsDatabase:
             if not self._table_exists(conn, "player_game_stats"):
                 self._apply_schema(conn)
             if not self._table_exists(conn, "member_consensus"):
+                self._apply_schema(conn)
+            if not self._table_exists(conn, "statshub_snapshots"):
                 self._apply_schema(conn)
             yield conn
             conn.commit()
@@ -960,6 +971,90 @@ class SportsDatabase:
                     expected_minutes, expected_innings, int(is_starter),
                 ),
             )
+
+    def set_sportradar_match_id(self, game_id: int, sportradar_match_id: str) -> None:
+        with self.connection() as conn:
+            conn.execute(
+                "UPDATE games SET sportradar_match_id = ? WHERE id = ?",
+                (str(sportradar_match_id), int(game_id)),
+            )
+
+    def save_statshub_snapshot(self, game_id: int, payload_json: str, *, sportradar_match_id: str | None = None) -> None:
+        with self.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO statshub_snapshots (game_id, sportradar_match_id, payload_json, synced_at)
+                VALUES (?, ?, ?, datetime('now'))
+                ON CONFLICT(game_id) DO UPDATE SET
+                    sportradar_match_id=excluded.sportradar_match_id,
+                    payload_json=excluded.payload_json,
+                    synced_at=excluded.synced_at
+                """,
+                (int(game_id), sportradar_match_id, payload_json),
+            )
+
+    def get_statshub_snapshot(self, game_id: int) -> dict[str, object] | None:
+        import json as _json
+
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT sportradar_match_id, payload_json, synced_at FROM statshub_snapshots WHERE game_id=?",
+                (int(game_id),),
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            payload = _json.loads(str(row["payload_json"]))
+        except _json.JSONDecodeError:
+            payload = {}
+        return {
+            "sportradar_match_id": row["sportradar_match_id"],
+            "payload": payload,
+            "synced_at": row["synced_at"],
+        }
+
+    def get_upcoming_games_with_sportradar_id(self, sport: Sport, *, days_ahead: int = 14) -> pd.DataFrame:
+        from datetime import date, timedelta
+
+        end = (date.today() + timedelta(days=days_ahead)).isoformat()
+        with self.connection() as conn:
+            return pd.read_sql_query(
+                """
+                SELECT id, match_date, home_team, away_team, sportradar_match_id, status
+                FROM games
+                WHERE sport = ?
+                  AND match_date >= date('now', '-1 day')
+                  AND match_date <= ?
+                  AND sportradar_match_id IS NOT NULL
+                  AND TRIM(sportradar_match_id) != ''
+                ORDER BY match_date, id
+                """,
+                conn,
+                params=(sport, end),
+            )
+
+    def find_game_by_sportradar_match_id(self, sport: Sport, sportradar_match_id: str) -> pd.Series | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM games
+                WHERE sport = ? AND sportradar_match_id = ?
+                LIMIT 1
+                """,
+                (sport, str(sportradar_match_id)),
+            ).fetchone()
+        return pd.Series(dict(row)) if row else None
+
+    def get_sportradar_match_id(self, game_id: int) -> str | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT sportradar_match_id FROM games WHERE id = ?",
+                (int(game_id),),
+            ).fetchone()
+        if row is None:
+            return None
+        val = row["sportradar_match_id"]
+        return str(val).strip() if val else None
 
     def get_players_by_team(self, sport: Sport, team: str) -> pd.DataFrame:
         from sportsbet.data.team_logos import team_name_variants

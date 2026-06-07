@@ -1,0 +1,209 @@
+"""StatsHub → SQLite 同步（傷兵 / 首發 / 球員統計）。"""
+from __future__ import annotations
+
+import logging
+from datetime import date
+
+from sportsbet import config
+from sportsbet.data.database import SportsDatabase
+from sportsbet.data.statshub.client import StatsHubClient
+from sportsbet.data.team_logos import resolve_team_in_database
+
+logger = logging.getLogger(__name__)
+
+Sport = str
+
+
+def _map_nickname_to_team(db: SportsDatabase, sport: Sport, nickname: str | None) -> str | None:
+    if not nickname:
+        return None
+    from sportsbet.data.team_logos import NBA_ALIASES, canonical_team_name
+
+    full = NBA_ALIASES.get(nickname, nickname)
+    try:
+        return resolve_team_in_database(db, sport, canonical_team_name(full, sport))  # type: ignore[arg-type]
+    except Exception:
+        return resolve_team_in_database(db, sport, full)  # type: ignore[arg-type]
+
+
+def _normalize_injury_status(raw: str | None) -> str:
+    if not raw:
+        return "Out"
+    key = raw.strip().lower()
+    if any(x in key for x in ("out", "缺席", "缺陣", "doubt")):
+        return "Out" if "doubt" not in key else "Doubtful"
+    if "question" in key or "疑" in key:
+        return "Questionable"
+    if "prob" in key or "可能" in key:
+        return "Probable"
+    return "Out"
+
+
+def _apply_statshub_bundle(
+    db: SportsDatabase,
+    sport: Sport,
+    game_id: int,
+    bundle,
+    *,
+    client: StatsHubClient | None = None,
+) -> dict[str, int]:
+    client = client or StatsHubClient(tenant=config.STATSHUB_TENANT, lang=config.STATSHUB_LANG)
+    db.set_sportradar_match_id(game_id, str(bundle.sportradar_match_id))
+    db.save_statshub_snapshot(
+        game_id,
+        client.bundle_to_json(bundle),
+        sportradar_match_id=str(bundle.sportradar_match_id),
+    )
+
+    with db.connection() as conn:
+        row = conn.execute("SELECT home_team, away_team, match_date FROM games WHERE id=?", (game_id,)).fetchone()
+    if row is None:
+        return {"error": 1}
+
+    home_team = str(row["home_team"])
+    away_team = str(row["away_team"])
+    match_date = str(row["match_date"])[:10]
+    summary = bundle.summary
+    side_team = {
+        "home": _map_nickname_to_team(db, sport, summary.get("home_nickname")) or home_team,
+        "away": _map_nickname_to_team(db, sport, summary.get("away_nickname")) or away_team,
+    }
+
+    out = {"players": 0, "injuries": 0, "lineups": 0, "player_stats": 0, "feeds_ok": len(bundle.merged.get("feeds_ok", []))}
+    report_date = date.today().isoformat()
+    merged = bundle.merged
+
+    for p in merged.get("players") or []:
+        pid = p.get("player_id")
+        name = p.get("name")
+        if not pid or not name:
+            continue
+        team = side_team.get(str(p.get("side")), home_team)
+        db.upsert_player(sport, str(pid), str(name), team, position=p.get("position"))
+        out["players"] += 1
+
+        stats = p.get("stats") if isinstance(p.get("stats"), dict) else {}
+        if stats or p.get("points") is not None:
+            db.upsert_player_stats(
+                sport,
+                str(pid),
+                report_date,
+                rolling_off_rating=float(p["points"]) if p.get("points") is not None else None,
+                bpm=float(p["rebounds"]) if p.get("rebounds") is not None else None,
+                vorp=float(p["assists"]) if p.get("assists") is not None else None,
+                usg_pct=float(p["minutes"]) if p.get("minutes") is not None else None,
+            )
+            out["player_stats"] += 1
+
+    for inj in merged.get("injuries") or []:
+        pid = inj.get("player_id")
+        name = inj.get("name")
+        if not name:
+            continue
+        if not pid:
+            pid = f"sr-name-{name}"
+            team = side_team.get(str(inj.get("side")), home_team)
+            db.upsert_player(sport, pid, name, team)
+        team = side_team.get(str(inj.get("side")), home_team)
+        db.upsert_injury(
+            sport,
+            str(pid),
+            team,
+            report_date,
+            _normalize_injury_status(inj.get("status")),
+            injury_type=inj.get("injury_type"),
+            source="statshub",
+        )
+        out["injuries"] += 1
+
+    for lu in merged.get("lineups") or []:
+        pid = lu.get("player_id")
+        if not pid:
+            continue
+        team = side_team.get(str(lu.get("side")), home_team)
+        db.upsert_projected_lineup(
+            sport,
+            team,
+            match_date,
+            str(pid),
+            expected_minutes=float(lu["expected_minutes"]) if lu.get("expected_minutes") is not None else None,
+            is_starter=bool(lu.get("is_starter")),
+        )
+        out["lineups"] += 1
+
+    db.set_backtest_sync_meta(sport, "statshub_synced_at", report_date)  # type: ignore[arg-type]
+    return out
+
+
+def sync_statshub_for_game(
+    db: SportsDatabase,
+    sport: Sport,
+    game_id: int,
+    sportradar_match_id: str | int,
+    *,
+    client: StatsHubClient | None = None,
+) -> dict[str, int]:
+    """拉取 StatsHub 並寫入 players / injuries / lineups / snapshot。"""
+    if not config.STATSHUB_ENABLED:
+        return {"skipped": 1}
+
+    client = client or StatsHubClient(tenant=config.STATSHUB_TENANT, lang=config.STATSHUB_LANG)
+    bundle = client.fetch_match_bundle(sportradar_match_id)
+    return _apply_statshub_bundle(db, sport, game_id, bundle, client=client)
+
+
+def sync_statshub_for_upcoming(
+    db: SportsDatabase,
+    sport: Sport,
+    *,
+    days_ahead: int = 7,
+) -> dict[str, int]:
+    """對已有 sportradar_match_id 的 upcoming 賽事同步 StatsHub。"""
+    totals = {"games": 0, "players": 0, "injuries": 0, "lineups": 0}
+    games = db.get_upcoming_games_with_sportradar_id(sport, days_ahead=days_ahead)
+    client = StatsHubClient(tenant=config.STATSHUB_TENANT, lang=config.STATSHUB_LANG)
+    for _, row in games.iterrows():
+        gid = int(row["id"])
+        mid = str(row["sportradar_match_id"])
+        part = sync_statshub_for_game(db, sport, gid, mid, client=client)
+        totals["games"] += 1
+        for k in ("players", "injuries", "lineups"):
+            totals[k] += int(part.get(k, 0))
+    return totals
+
+
+def link_statshub_match(
+    db: SportsDatabase,
+    game_id: int,
+    url_or_match_id: str,
+) -> str | None:
+    """將 StatsHub URL 或 match ID 綁定至 games.sportradar_match_id。"""
+    from sportsbet.data.statshub.parser import parse_match_id_from_url
+
+    raw = str(url_or_match_id).strip()
+    mid = parse_match_id_from_url(raw) if "/" in raw else raw
+    if not mid or not mid.isdigit():
+        return None
+    db.set_sportradar_match_id(game_id, mid)
+    return mid
+
+
+def import_statshub_feeds_json(
+    db: SportsDatabase,
+    sport: Sport,
+    game_id: int,
+    match_id: str | int,
+    feeds: dict[str, object],
+    *,
+    summary: dict[str, object] | None = None,
+) -> dict[str, int]:
+    """匯入瀏覽器 DevTools 複製的 Gismo feed JSON。"""
+    client = StatsHubClient(tenant=config.STATSHUB_TENANT, lang=config.STATSHUB_LANG)
+    if summary is None:
+        try:
+            bundle_ssr = client.fetch_match_bundle(match_id)
+            summary = bundle_ssr.summary
+        except Exception:
+            summary = {}
+    bundle = client.bundle_from_feeds(match_id, feeds, summary=summary)  # type: ignore[arg-type]
+    return _apply_statshub_bundle(db, sport, game_id, bundle, client=client)

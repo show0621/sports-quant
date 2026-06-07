@@ -38,4 +38,22 @@ def sync_v2_player_data(db: SportsDatabase, sport: str, *, days_lineup: int = 7)
         match_dates=match_dates,
         client=client,
     )
-    return {"players": players_n, "injuries": injuries_n, "lineups": lineups_n}
+
+    statshub_n: dict[str, int] = {}
+    if sport == "nba":
+        from sportsbet import config
+
+        if config.STATSHUB_ENABLED:
+            try:
+                from sportsbet.data.statshub_sync import sync_statshub_for_upcoming
+
+                statshub_n = sync_statshub_for_upcoming(db, sport, days_ahead=days_lineup)
+            except Exception:
+                statshub_n = {}
+
+    out = {"players": players_n, "injuries": injuries_n, "lineups": lineups_n}
+    if statshub_n:
+        out["statshub_games"] = statshub_n.get("games", 0)
+        out["statshub_injuries"] = statshub_n.get("injuries", 0)
+        out["statshub_lineups"] = statshub_n.get("lineups", 0)
+    return out

@@ -207,6 +207,11 @@ SPORTSLOTTERY_BLOB_BASE = os.getenv(
     "https://blob.sportslottery.com.tw/apidata",
 )
 
+# --- Sportradar StatsHub（台灣運彩官方數據頁）---
+STATSHUB_ENABLED = os.getenv("STATSHUB_ENABLED", "true").lower() == "true"
+STATSHUB_TENANT = os.getenv("STATSHUB_TENANT", "taiwansportslottery")
+STATSHUB_LANG = os.getenv("STATSHUB_LANG", "zht")
+
 # --- JBot 歷史賠率 https://sportsbot.tech/api/sportslottery/ ---
 JBOT_TOKEN = resolve_jbot_token()
 # 單次 sync 最多抓取天數（試用密鑰每日 20 次，建議 14 以內）
