@@ -54,7 +54,16 @@ def _statshub_injuries_for_teams(db: SportsDatabase, sport: str, teams: set[str]
         away = str(g["away_team"])
         if home not in teams and away not in teams:
             continue
-        snap = db.get_statshub_snapshot(int(g["id"]))
+        try:
+            getter = getattr(db, "get_statshub_snapshot", None)
+            if callable(getter):
+                snap = getter(int(g["id"]))
+            else:
+                from sportsbet.ui.statshub_panel import _compat_get_statshub_snapshot
+
+                snap = _compat_get_statshub_snapshot(db, int(g["id"]))
+        except Exception:
+            snap = None
         if not snap or not isinstance(snap.get("payload"), dict):
             continue
         merged = snap["payload"].get("merged") or {}

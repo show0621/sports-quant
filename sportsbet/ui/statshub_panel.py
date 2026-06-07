@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import sqlite3
 from typing import Any
 
 import pandas as pd
@@ -10,6 +12,92 @@ import streamlit as st
 from sportsbet import config
 from sportsbet.data.database import SportsDatabase
 from sportsbet.data.statshub.parser import statshub_urls
+
+logger = logging.getLogger(__name__)
+
+
+def _table_exists(db: SportsDatabase, conn: sqlite3.Connection, table: str) -> bool:
+    fn = getattr(db, "_table_exists", None)
+    if callable(fn):
+        return bool(fn(conn, table))
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+        (table,),
+    ).fetchone()
+    return row is not None
+
+
+def _compat_get_sportradar_match_id(db: SportsDatabase, game_id: int) -> str | None:
+    getter = getattr(db, "get_sportradar_match_id", None)
+    if callable(getter):
+        return getter(game_id)
+    try:
+        with db.connection() as conn:
+            row = conn.execute(
+                "SELECT sportradar_match_id FROM games WHERE id = ?",
+                (int(game_id),),
+            ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    if row is None:
+        return None
+    val = row["sportradar_match_id"] if "sportradar_match_id" in row.keys() else None
+    return str(val).strip() if val else None
+
+
+def _compat_get_statshub_snapshot(db: SportsDatabase, game_id: int) -> dict[str, object] | None:
+    getter = getattr(db, "get_statshub_snapshot", None)
+    if callable(getter):
+        return getter(game_id)
+    try:
+        with db.connection() as conn:
+            if not _table_exists(db, conn, "statshub_snapshots"):
+                return None
+            row = conn.execute(
+                "SELECT sportradar_match_id, payload_json, synced_at FROM statshub_snapshots WHERE game_id=?",
+                (int(game_id),),
+            ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    if row is None:
+        return None
+    try:
+        payload = json.loads(str(row["payload_json"]))
+    except json.JSONDecodeError:
+        payload = {}
+    return {
+        "sportradar_match_id": row["sportradar_match_id"],
+        "payload": payload,
+        "synced_at": row["synced_at"],
+    }
+
+
+def _compat_set_sportradar_match_id(db: SportsDatabase, game_id: int, match_id: str) -> None:
+    setter = getattr(db, "set_sportradar_match_id", None)
+    if callable(setter):
+        setter(game_id, match_id)
+        return
+    with db.connection() as conn:
+        conn.execute(
+            "UPDATE games SET sportradar_match_id = ? WHERE id = ?",
+            (str(match_id), int(game_id)),
+        )
+
+
+def _compat_link_match(db: SportsDatabase, game_id: int, url_or_match_id: str) -> str | None:
+    try:
+        from sportsbet.data.statshub_sync import link_statshub_match
+
+        return link_statshub_match(db, game_id, url_or_match_id)
+    except Exception:
+        from sportsbet.data.statshub.parser import parse_match_id_from_url
+
+        raw = str(url_or_match_id).strip()
+        mid = parse_match_id_from_url(raw) if "/" in raw else raw
+        if not mid or not mid.isdigit():
+            return None
+        _compat_set_sportradar_match_id(db, game_id, mid)
+        return mid
 
 
 def _period_table(summary: dict[str, Any]) -> pd.DataFrame:
@@ -118,7 +206,7 @@ def _espn_lineups_for_teams(
 
 
 def _load_payload(db: SportsDatabase, game_id: int) -> dict[str, Any] | None:
-    snap = db.get_statshub_snapshot(game_id)
+    snap = _compat_get_statshub_snapshot(db, game_id)
     if snap and isinstance(snap.get("payload"), dict):
         return snap["payload"]  # type: ignore[return-value]
     return None
@@ -134,6 +222,25 @@ def render_statshub_panel(
     match_date: str,
 ) -> None:
     """在賽事卡片內顯示 StatsHub 連結、賽事摘要、傷兵/陣容/統計。"""
+    try:
+        _render_statshub_panel_inner(
+            db, sport, game_id,
+            home_team=home_team, away_team=away_team, match_date=match_date,
+        )
+    except Exception as exc:
+        logger.warning("StatsHub 面板略過: %s", exc)
+        st.caption(f"StatsHub 面板暫不可用：{exc}")
+
+
+def _render_statshub_panel_inner(
+    db: SportsDatabase,
+    sport: str,
+    game_id: int | None,
+    *,
+    home_team: str,
+    away_team: str,
+    match_date: str,
+) -> None:
     if sport != "nba" or not config.STATSHUB_ENABLED:
         return
 
@@ -147,7 +254,7 @@ def render_statshub_panel(
         st.info("尚無 game_id，無法同步 StatsHub。")
         return
 
-    match_id = db.get_sportradar_match_id(int(game_id))
+    match_id = _compat_get_sportradar_match_id(db, int(game_id))
     payload = _load_payload(db, int(game_id))
 
     col_link, col_sync = st.columns([3, 1])
@@ -161,11 +268,11 @@ def render_statshub_panel(
         )
     with col_sync:
         if st.button("同步 StatsHub", key=f"statshub_sync_{game_id}"):
-            from sportsbet.data.statshub_sync import link_statshub_match, sync_statshub_for_game
+            from sportsbet.data.statshub_sync import sync_statshub_for_game
 
             raw = (url_input or match_id or "").strip()
             if raw:
-                linked = link_statshub_match(db, int(game_id), raw)
+                linked = _compat_link_match(db, int(game_id), raw)
                 if linked:
                     with st.spinner("拉取 StatsHub…"):
                         stats = sync_statshub_for_game(db, sport, int(game_id), linked)
@@ -351,6 +458,6 @@ def render_statshub_panel(
             except Exception as exc:
                 st.error(str(exc))
 
-    snap = db.get_statshub_snapshot(int(game_id))
+    snap = _compat_get_statshub_snapshot(db, int(game_id))
     if snap and snap.get("synced_at"):
         st.caption(f"快照同步：{snap['synced_at']}")
