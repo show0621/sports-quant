@@ -154,7 +154,13 @@ def _write_sportslottery_rows(
         market = str(o.get("market", "moneyline"))
         selection = str(o.get("selection", "home"))
         handicap = float(o["handicap"]) if pd.notna(o.get("handicap")) else None
-        if market == "spread" and selection == "away" and handicap is not None:
+        src = str(o.get("source", ""))
+        if (
+            market == "spread"
+            and selection == "away"
+            and handicap is not None
+            and src not in ("sportslottery_web", "sportslottery_web_dom")
+        ):
             handicap = -handicap
         db.upsert_odds(
             gid,

@@ -319,7 +319,7 @@ class SportLotteryClient:
         if not frames:
             logger.warning(
                 "台灣運彩 Blob 無資料（Live=[]、Register 後備皆空）。"
-                "賽前盤口可能僅在官網 SPA 提供；請設定 JBOT_TOKEN 或執行 watch 同步。"
+                "賽前盤口請啟用 SPORTSLOTTERY_PLAYWRIGHT 由官網 event 頁抓取。"
             )
             return pd.DataFrame(columns=STANDARD_ODDS_COLUMNS)
         if len(frames) == 1:

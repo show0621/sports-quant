@@ -224,6 +224,15 @@ SPORTSLOTTERY_PLAYWRIGHT_STATE_PATH = os.getenv(
     str(Path(__file__).resolve().parents[1] / "data" / ".sportslottery_state.json"),
 )
 
+
+def sportslottery_event_ids(sport: str) -> list[str]:
+    """官網 event id 後備（例：SPORTSLOTTERY_EVENT_IDS_NBA=3472877.1）。"""
+    key = f"SPORTSLOTTERY_EVENT_IDS_{sport.upper()}"
+    raw = os.getenv(key, "")
+    if not raw:
+        return []
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
 # --- Sportradar StatsHub（台灣運彩官方數據頁）---
 STATSHUB_ENABLED = os.getenv("STATSHUB_ENABLED", "true").lower() == "true"
 STATSHUB_TENANT = os.getenv("STATSHUB_TENANT", "taiwansportslottery")
