@@ -1806,6 +1806,21 @@ class SportsDatabase:
                 params=(game_id,),
             )
 
+    def get_preferred_game_odds(self, game_id: int) -> pd.DataFrame:
+        """依 bookmaker 優先序取各 (market, selection) 最佳一筆。"""
+        from sportsbet import config
+
+        raw = self.get_game_odds(game_id)
+        if raw.empty:
+            return raw
+        if "bookmaker" not in raw.columns:
+            return raw
+        priority = {b: i for i, b in enumerate(config.ODDS_BOOKMAKER_PRIORITY)}
+        df = raw.copy()
+        df["_bm_rank"] = df["bookmaker"].astype(str).map(lambda x: priority.get(x, 99))
+        df = df.sort_values(["market", "selection", "_bm_rank", "id"], ascending=[True, True, True, False])
+        return df.drop_duplicates(subset=["market", "selection"], keep="first").drop(columns=["_bm_rank"])
+
     def get_game_predictions(self, game_id: int) -> pd.DataFrame:
         with self.connection() as conn:
             return pd.read_sql_query(

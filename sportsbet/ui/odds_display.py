@@ -301,6 +301,106 @@ def build_game_market_picks(
     return {"moneyline": ml, "spread": spread, "total": total, "margin": margin}
 
 
+def _band_probs_for_forecast(
+    fc: dict[str, Any],
+    sport: str,
+    *,
+    margin_f: float | None,
+    total_f: float | None,
+) -> dict[str, float]:
+    from sportsbet.models.margin_bands import bands_for_sport, prob_margin_band
+
+    if margin_f is None:
+        return {}
+    return {
+        band.key: prob_margin_band(
+            band.side, band.lo, band.hi, margin_f, sport=sport, pred_total=total_f,
+        )
+        for band in bands_for_sport(sport)
+    }
+
+
+def render_market_accuracy_strip(db: SportsDatabase, sport: str) -> None:
+    """回測：各玩法準確率與平均 EV（供本場推薦參考）。"""
+    from sportsbet.evaluation.market_backtest import MARKET_LABELS, build_market_backtest_table
+
+    df = db.get_backtest_frame(sport)
+    if df is None or df.empty:
+        return
+    table = build_market_backtest_table(df)
+    if table.empty:
+        return
+    parts = []
+    for _, r in table.iterrows():
+        acc = f"{r['準確率']:.0%}" if pd.notna(r["準確率"]) else "—"
+        ev = f"{r['平均EV']:+.1%}" if pd.notna(r["平均EV"]) else "—"
+        parts.append(f"{r['玩法']} 準確率 {acc} · 平均EV {ev}")
+    st.markdown(
+        "<div class='sq-odds-cap'>" + " ｜ ".join(parts) + "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_combo_bet_recommendations(
+    fc: GameForecast,
+    odds: dict[str, object],
+    sport: str,
+    picks: dict[str, MarketPickView | None],
+    *,
+    min_ev: float | None = None,
+) -> None:
+    from sportsbet import config
+    from sportsbet.models.forecast import forecast_pick_dict
+    from sportsbet.models.margin_combo import build_combo_recommendations, recommend_best_play
+
+    threshold = config.MIN_EV_THRESHOLD if min_ev is None else min_ev
+    fc_dict = forecast_pick_dict(fc)
+    margin_f = fc_dict.get("predicted_margin")
+    total_f = fc_dict.get("predicted_total")
+    if margin_f is None:
+        return
+    margin_odds = odds.get("margin_odds") or {}
+    if not margin_odds:
+        return
+    band_probs = _band_probs_for_forecast(
+        fc_dict, sport, margin_f=float(margin_f), total_f=float(total_f) if total_f is not None else None,
+    )
+    combos = build_combo_recommendations(
+        sport=sport,
+        pred_margin=float(margin_f),
+        pred_total=float(total_f) if total_f is not None and not pd.isna(total_f) else None,
+        margin_odds=margin_odds,
+        band_probs=band_probs,
+        home_team=fc.home_team,
+        away_team=fc.away_team,
+    )
+    if not combos:
+        return
+
+    best_type, best_desc, best_ev = recommend_best_play(picks, combos, min_ev=threshold)
+    header = (
+        f"<div class='sq-rec-panel'><h4>本場建議玩法</h4>"
+        f"<div class='sq-odds-line'><strong>{best_desc}</strong>"
+        + (f" · EV {_fmt_ev(best_ev)}" if best_ev is not None else "")
+        + "</div>"
+    )
+    body_parts = []
+    for combo in combos:
+        legs = " · ".join(
+            f"{leg.label} 賠率 {_fmt_odds(leg.odds)}（模型 {_fmt_pct(leg.prob)}）"
+            for leg in combo.legs
+        )
+        ev_cls = _ev_class(combo.ev_per_unit)
+        body_parts.append(
+            f"<div class='sq-odds-line'><strong>{combo.title}</strong><br>"
+            f"{combo.rationale}<br>"
+            f"雙包：{legs}<br>"
+            f"合計命中機率 {_fmt_pct(combo.hit_prob)} · "
+            f"<span class='{ev_cls}'>雙投 EV {_fmt_ev(combo.ev_per_unit)}/單位</span></div>"
+        )
+    st.markdown(header + "".join(body_parts) + "</div>", unsafe_allow_html=True)
+
+
 def actual_result_line(
     home_score: int | None,
     away_score: int | None,
@@ -381,7 +481,7 @@ def summarize_game_odds(db: SportsDatabase, game_id: int | None) -> dict[str, ob
     if not game_id:
         return empty
 
-    raw = db.get_game_odds(int(game_id))
+    raw = db.get_preferred_game_odds(int(game_id))
     if raw.empty:
         return empty
 
@@ -593,4 +693,6 @@ def render_odds_panel(
         """,
         unsafe_allow_html=True,
     )
+    render_market_accuracy_strip(db, sport)
     render_bet_recommendations(picks)
+    render_combo_bet_recommendations(fc, odds, sport, picks)

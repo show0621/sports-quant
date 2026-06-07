@@ -79,6 +79,40 @@ def _game_has_tw_core_markets(db: SportsDatabase, game_id: int) -> bool:
     return all(m in markets for m in CORE_MARKETS)
 
 
+def _date_odds_fresh_in_db(db: SportsDatabase, sport: Sport, match_date: str) -> bool:
+    """該日所有賽事具 sportslottery 核心盤且更新時間在 TTL 內。"""
+    from datetime import datetime, timedelta, timezone
+
+    games = db.get_games(sport, match_date)
+    if games.empty:
+        return True
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=config.ODDS_DB_FRESH_HOURS)
+    for _, g in games.iterrows():
+        gid = int(g["id"])
+        if not _game_has_tw_core_markets(db, gid):
+            return False
+        with db.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT MAX(created_at) AS ts FROM odds
+                WHERE game_id = ? AND bookmaker = ?
+                """,
+                (gid, TW_BOOKMAKER),
+            ).fetchone()
+        ts_raw = row["ts"] if row else None
+        if not ts_raw:
+            return False
+        try:
+            ts = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return False
+        if ts < cutoff:
+            return False
+    return True
+
+
 def prematch_odds_source_hint() -> str:
     """Streamlit / 日誌用：說明賽前盤口來源。"""
     if config.SPORTSLOTTERY_PLAYWRIGHT_ENABLED:
@@ -292,17 +326,25 @@ def sync_tw_odds_for_date(
 ) -> dict[str, int]:
     """
     單日台灣盤口：① 官網/Blob ② 缺漏時玩運彩（官網有則不抓玩運彩）。
+    DB 已有完整 sportslottery 核心盤且未過期時跳過官網抓取。
     """
-    out = {"sportslottery_rows": 0, "playsport_fallback": 0, "sportslottery_web": 0}
-    try:
-        odds_df = fetch_sportslottery_odds_df(sport)
-        if not odds_df.empty and "match_date" in odds_df.columns:
-            day_df = odds_df[odds_df["match_date"].astype(str).str[:10] == match_date]
-            out["sportslottery_rows"] = _write_sportslottery_rows(
-                db, sport, day_df, match_date, replace=replace,
-            )
-    except Exception as exc:
-        logger.warning("台灣運彩 Blob 失敗 %s %s: %s", sport, match_date, exc)
+    out = {"sportslottery_rows": 0, "playsport_fallback": 0, "sportslottery_web": 0, "cached": 0}
+    if not replace and _date_odds_fresh_in_db(db, sport, match_date):
+        logger.info(
+            "盤口 %s %s 已快取於 DB（<%d 小時），跳過官網抓取",
+            sport, match_date, config.ODDS_DB_FRESH_HOURS,
+        )
+        out["cached"] = 1
+    else:
+        try:
+            odds_df = fetch_sportslottery_odds_df(sport)
+            if not odds_df.empty and "match_date" in odds_df.columns:
+                day_df = odds_df[odds_df["match_date"].astype(str).str[:10] == match_date]
+                out["sportslottery_rows"] = _write_sportslottery_rows(
+                    db, sport, day_df, match_date, replace=replace,
+                )
+        except Exception as exc:
+            logger.warning("台灣運彩抓取失敗 %s %s: %s", sport, match_date, exc)
 
     use_ps = playsport_fallback if playsport_fallback is not None else config.PLAYSPORT_ENABLED
     if use_ps:

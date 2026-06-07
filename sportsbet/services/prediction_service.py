@@ -412,8 +412,9 @@ class PredictionService:
         """現在/未來賽事預測總表。"""
         from sportsbet.data.team_names import team_bilingual
         from sportsbet.ui.matchup_display import format_match_datetime, taipei_match_date
-        from sportsbet.ui.odds_display import build_game_market_picks, summarize_game_odds
+        from sportsbet.ui.odds_display import _band_probs_for_forecast, build_game_market_picks, summarize_game_odds
         from sportsbet.models.forecast import forecast_pick_dict
+        from sportsbet.models.margin_combo import build_combo_recommendations, recommend_best_play
         from sportsbet import config
 
         rows = []
@@ -433,6 +434,29 @@ class PredictionService:
                 away_team=f.away_team,
             )
             rec_parts: list[str] = []
+            fc_dict = forecast_pick_dict(f)
+            margin_f = fc_dict.get("predicted_margin")
+            total_f = fc_dict.get("predicted_total")
+            margin_odds = odds.get("margin_odds") or {}
+            combos = []
+            if margin_f is not None and margin_odds:
+                band_probs = _band_probs_for_forecast(
+                    fc_dict, f.sport,
+                    margin_f=float(margin_f),
+                    total_f=float(total_f) if total_f is not None and not pd.isna(total_f) else None,
+                )
+                combos = build_combo_recommendations(
+                    sport=f.sport,
+                    pred_margin=float(margin_f),
+                    pred_total=float(total_f) if total_f is not None and not pd.isna(total_f) else None,
+                    margin_odds=margin_odds,
+                    band_probs=band_probs,
+                    home_team=f.home_team,
+                    away_team=f.away_team,
+                )
+            best_type, best_desc, best_ev = recommend_best_play(picks, combos, min_ev=config.MIN_EV_THRESHOLD)
+            if best_desc:
+                rec_parts.append(best_desc + (f" (EV {best_ev:+.1%})" if best_ev is not None else ""))
             for key, label in [
                 ("moneyline", "勝負"),
                 ("spread", "讓分"),
@@ -441,7 +465,9 @@ class PredictionService:
             ]:
                 p = picks.get(key)
                 if p and p.ev is not None and p.ev >= config.MIN_EV_THRESHOLD:
-                    rec_parts.append(f"{label}:{p.selection_label}(EV {p.ev:+.1%})")
+                    part = f"{label}:{p.selection_label}(EV {p.ev:+.1%})"
+                    if part not in " · ".join(rec_parts):
+                        rec_parts.append(part)
             rows.append(
                 {
                     "區間": "今日" if tw_date == today else "未來",

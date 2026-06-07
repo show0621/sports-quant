@@ -1,0 +1,18 @@
+---
+description: 台灣運彩/玩運彩優先的資料來源與 DB 快取策略
+alwaysApply: true
+---
+
+# 資料來源優先順序
+
+1. **台灣運彩官網**（Playwright event 頁 + Blob 場中）→ 賠率、開賣賽事
+2. **玩運彩** → 官網缺漏時補 odds / 歷史統計
+3. **ESPN / nba_api / StatsHub** → 賽程、比分、傷兵；用於**比對驗證**，非取代官網盤口
+4. **DB 優先讀取**：`ODDS_DB_FRESH_HOURS` 內且核心盤完整 → 不重新抓取官網
+5. **讀取盤口**：`get_preferred_game_odds`（bookmaker：sportslottery > playsport > tw_standard > jbot）
+
+## 反爬蟲
+
+- 使用 Playwright `storage_state`、非 headless 首次通過 CF
+- event 間隔 `PLAYWRIGHT_EVENT_GAP_SEC` + 隨機抖動
+- 不要高頻重複請求；有 DB 快取就跳過

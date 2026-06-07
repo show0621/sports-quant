@@ -162,6 +162,39 @@ def _row_base(
     }
 
 
+def _parse_margin_dom_rows(
+    lines: list[str],
+    base: dict[str, Any],
+    home_zh: str,
+    away_zh: str,
+    sport: str,
+) -> list[dict[str, Any]]:
+    """解析勝分差區間（1-5、6-10…）。"""
+    rows: list[dict[str, Any]] = []
+    margin_line = re.compile(r"(.+?)\s+(\d+)-(\d+)\s*分")
+    seen: set[str] = set()
+    for i, line in enumerate(lines):
+        m = margin_line.match(line)
+        if not m:
+            continue
+        team_txt, lo_s, hi_s = m.group(1).strip(), int(m.group(2)), int(m.group(3))
+        odds, _ = _next_odds(lines, i + 1)
+        if not odds:
+            continue
+        if home_zh and (home_zh in team_txt or team_txt in home_zh):
+            side = "home"
+        elif away_zh and (away_zh in team_txt or team_txt in away_zh):
+            side = "away"
+        else:
+            continue
+        key = f"{side}_{lo_s}_{hi_s}" if hi_s < 26 else f"{side}_26_plus"
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append({**base, "market": "margin", "selection": key, "handicap": None, "odds": odds})
+    return rows
+
+
 def _parse_event_dom_text(
     text: str,
     sport: str,
@@ -244,6 +277,8 @@ def _parse_event_dom_text(
                 {**base, "market": "total", "selection": "under", "handicap": total_line, "odds": under_odds}
             )
         break
+
+    rows.extend(_parse_margin_dom_rows(lines, base, home_zh, away_zh, sport))
 
     if not rows:
         return pd.DataFrame(columns=STANDARD_ODDS_COLUMNS)
@@ -440,6 +475,9 @@ class SportLotteryWebClient:
         return list(dict.fromkeys([*configured, *found]))
 
     def _fetch_events_batch(self, sport: str, event_ids: list[str]) -> pd.DataFrame:
+        import random
+        import time
+
         from playwright.sync_api import sync_playwright
 
         frames: list[pd.DataFrame] = []
@@ -467,7 +505,10 @@ class SportLotteryWebClient:
             page.wait_for_timeout(3000)
             _accept_cookies(page)
 
-            for eid in event_ids:
+            for idx, eid in enumerate(event_ids):
+                if idx > 0:
+                    gap = config.PLAYWRIGHT_EVENT_GAP_SEC + random.uniform(0.5, 2.5)
+                    time.sleep(gap)
                 url = event_url(sport, eid)
                 logger.info("運彩官網 event %s", eid)
                 page.goto(url, wait_until="load", timeout=120000)

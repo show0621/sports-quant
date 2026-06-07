@@ -87,11 +87,12 @@ class NbaApiIngestionAdapter(SportLotteryOddsMixin, DataIngestionProvider):
 
 class HybridIngestionProvider(SportLotteryOddsMixin, DataIngestionProvider):
     """
-    優先順序：
-    - 賽程：API-Sports（若金鑰可用且賽季未受限）→ NBA: nba_api 當季 / ESPN 每日
-    - 歷史：NBA nba_api → API-Sports → ESPN 回補
-    - 賠率：台灣運彩 Blob（官網 event 同源）→ 玩運彩補缺
-    - 傷兵：ESPN（由 player_ingestion 處理）
+    資料優先順序（寫入 DB 後以 DB 為準，未過期不重爬）：
+
+    - **賽程 / 比分**：ESPN、nba_api（交叉比對用；非台灣盤口來源）
+    - **賠率 / 台灣盤**：① 運彩官網 SPA（Playwright）② Blob 場中 ③ 玩運彩補缺
+    - **統計 / 傷兵**：玩運彩、StatsHub 補強；ESPN 傷兵與 lineup 驗證
+    - **讀取**：UI 與預測優先 `get_preferred_game_odds`（sportslottery > playsport）
     """
 
     def __init__(self, db: SportsDatabase | None = None):

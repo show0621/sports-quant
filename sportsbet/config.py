@@ -223,6 +223,19 @@ SPORTSLOTTERY_PLAYWRIGHT_STATE_PATH = os.getenv(
     "SPORTSLOTTERY_PLAYWRIGHT_STATE_PATH",
     str(Path(__file__).resolve().parents[1] / "data" / ".sportslottery_state.json"),
 )
+# DB 盤口視為有效的小時數（未過期則不重新抓取官網）
+ODDS_DB_FRESH_HOURS = int(os.getenv("ODDS_DB_FRESH_HOURS", "6"))
+# 讀取盤口時 bookmaker 優先序（官網 > 玩運彩 > 其他）
+ODDS_BOOKMAKER_PRIORITY: tuple[str, ...] = tuple(
+    x.strip()
+    for x in os.getenv(
+        "ODDS_BOOKMAKER_PRIORITY",
+        "sportslottery,playsport,tw_standard,jbot",
+    ).split(",")
+    if x.strip()
+)
+# Playwright 連續 event 間隔（秒，含隨機抖動下限）
+PLAYWRIGHT_EVENT_GAP_SEC = float(os.getenv("PLAYWRIGHT_EVENT_GAP_SEC", "2.0"))
 
 
 def sportslottery_event_ids(sport: str) -> list[str]:
