@@ -199,7 +199,15 @@ def cmd_simulate(args: argparse.Namespace) -> None:
 def cmd_optimize(args: argparse.Namespace) -> None:
     from scripts.bet_optimizer_cli import run_cli
 
-    run_cli()
+    game_ids = [int(x) for x in args.game_id] if args.game_id else None
+    run_cli(
+        from_db=args.from_db,
+        sport=args.sport,
+        days=args.days,
+        game_ids=game_ids,
+        total_stake=args.stake,
+        min_ev=args.min_ev,
+    )
 
 
 def main() -> None:
@@ -284,6 +292,12 @@ def main() -> None:
     p_sim.set_defaults(func=cmd_simulate)
 
     p_opt = sub.add_parser("optimize", help="全玩法 EV 優化 / 對沖 / 串關 CLI")
+    p_opt.add_argument("--from-db", action="store_true", help="從 DB 自動讀取 preferred 盤口")
+    p_opt.add_argument("--sport", choices=["nba", "mlb"], default="nba")
+    p_opt.add_argument("--days", type=int, default=7, help="--from-db 前瞻天數")
+    p_opt.add_argument("--game-id", type=int, action="append", dest="game_id", help="指定 game_id（可重複）")
+    p_opt.add_argument("--stake", type=float, default=None, help="總注碼（元）")
+    p_opt.add_argument("--min-ev", type=float, default=None, help="最低 EV 門檻")
     p_opt.set_defaults(func=cmd_optimize)
 
     args = parser.parse_args()

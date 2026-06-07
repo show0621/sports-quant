@@ -466,59 +466,10 @@ def format_market_pick_html(
 
 def summarize_game_odds(db: SportsDatabase, game_id: int | None) -> dict[str, object]:
     """取該場最新盤口摘要。"""
-    empty: dict[str, object] = {
-        "ml_home": None,
-        "ml_away": None,
-        "spread_home_line": None,
-        "spread_away_line": None,
-        "spread_home_odds": None,
-        "spread_away_odds": None,
-        "total_line": None,
-        "over_odds": None,
-        "under_odds": None,
-        "margin_odds": {},
-    }
-    if not game_id:
-        return empty
+    from sportsbet.data.odds_summary import summarize_preferred_odds
 
-    raw = db.get_preferred_game_odds(int(game_id))
-    if raw.empty:
-        return empty
-
-    by = _latest_odds_by_key(raw)
-
-    ml_h = by.get(("moneyline", "home"))
-    ml_a = by.get(("moneyline", "away"))
-    sp_h = by.get(("spread", "home"))
-    sp_a = by.get(("spread", "away"))
-    ov = by.get(("total", "over"))
-    un = by.get(("total", "under"))
-
-    total_line = None
-    if ov is not None and pd.notna(ov.get("handicap")):
-        total_line = float(ov["handicap"])
-    elif un is not None and pd.notna(un.get("handicap")):
-        total_line = float(un["handicap"])
-
-    spread_home_line = float(sp_h["handicap"]) if sp_h is not None and pd.notna(sp_h.get("handicap")) else None
-    spread_away_line = float(sp_a["handicap"]) if sp_a is not None and pd.notna(sp_a.get("handicap")) else None
-
-    return {
-        "ml_home": float(ml_h["odds"]) if ml_h is not None else None,
-        "ml_away": float(ml_a["odds"]) if ml_a is not None else None,
-        "spread_home_line": spread_home_line,
-        "spread_away_line": spread_away_line,
-        "spread_home_odds": float(sp_h["odds"]) if sp_h is not None else None,
-        "spread_away_odds": float(sp_a["odds"]) if sp_a is not None else None,
-        "total_line": total_line,
-        "over_odds": float(ov["odds"]) if ov is not None else None,
-        "under_odds": float(un["odds"]) if un is not None else None,
-        "margin_odds": {
-            str(row["selection"]): float(row["odds"])
-            for _, row in raw.iterrows()
-            if str(row.get("market")) == "margin" and pd.notna(row.get("odds"))
-        },
-    }
+    odds = summarize_preferred_odds(db, game_id)
+    return {k: v for k, v in odds.items() if k not in ("bookmakers", "has_core")}
 
 
 def _margin_odds_html(margin_odds: dict[str, float], sport: str, *, limit: int = 6) -> str:

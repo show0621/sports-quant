@@ -16,8 +16,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from sportsbet.models.margin_bands import bands_for_sport
+from sportsbet.optimization.db_loader import load_games_from_db, list_upcoming_with_odds_status
 from sportsbet.optimization.parlay_engine import MatchParlayOptions, ParlayLeg, ParlaySystemOptimizer
 from sportsbet.optimization.universal_sport_optimizer import GameInput, UniversalSportOptimizer
+from sportsbet.data.database import SportsDatabase
 
 SPORT_CHOICES = {
     "1": ("nba", "NBA 籃球"),
@@ -157,41 +159,116 @@ def _build_parlay_options(
     return MatchParlayOptions(match_label=game.label, legs=legs)
 
 
-def run_cli() -> None:
-    print("=" * 60)
-    print("  台灣運彩 · 全玩法 EV 優化 / 對沖 / 串關系統")
-    print("  UniversalSportOptimizer v1.0")
-    print("=" * 60)
-
-    n_raw = input("\n要分析幾場比賽？(1~5) [1]: ").strip() or "1"
-    n_games = max(1, min(5, int(n_raw)))
-    total_stake = _prompt_float("單場/串關總注碼（元）", 100.0)
-    min_ev_raw = input("最低 EV 門檻 (例 0.05 = 5%) [0.05]: ").strip()
-    min_ev = float(min_ev_raw) if min_ev_raw else 0.05
-
+def _run_analysis(
+    games: list[GameInput],
+    *,
+    total_stake: float,
+    min_ev: float,
+) -> None:
     optimizer = UniversalSportOptimizer(min_ev=min_ev)
     parlay_opt = ParlaySystemOptimizer(min_ev=min_ev)
-
-    games: list[GameInput] = []
-    matrices = []
     match_options: list[MatchParlayOptions] = []
 
-    for i in range(1, n_games + 1):
-        g = _input_game(i)
-        games.append(g)
+    for g in games:
         matrix = optimizer.build_probability_matrix(g)
-        matrices.append(matrix)
         best, hedges = optimizer.find_best_single_bet(matrix, g, total_stake=total_stake)
         print("\n" + optimizer.format_single_game_report(g, matrix, best, hedges, total_stake=total_stake))
         match_options.append(_build_parlay_options(g, matrix, optimizer))
 
-    if n_games >= 2:
+    if len(games) >= 2:
         parlays, systems, dutch = parlay_opt.optimize_parlay_system(
             match_options,
             total_stake=total_stake,
             parlay_size=2,
         )
         print("\n" + parlay_opt.format_parlay_report(parlays, systems, dutch, total_stake=total_stake))
+
+
+def run_cli_from_db(
+    *,
+    sport: str = "nba",
+    days: int = 7,
+    game_ids: list[int] | None = None,
+    total_stake: float = 100.0,
+    min_ev: float = 0.05,
+) -> None:
+    """從 DB 自動載入 preferred 盤口 + 模型預測。"""
+    print("=" * 60)
+    print("  台灣運彩 · DB 自動載入模式")
+    print("=" * 60)
+
+    db = SportsDatabase()
+    rows = list_upcoming_with_odds_status(db, sport, days_ahead=days)
+    if not rows:
+        print(f"無 {sport} 前瞻賽事。請先 sync。")
+        return
+
+    print(f"\n--- 賽程（{sport}，{days} 天）---")
+    for r in rows:
+        mark = "✓" if r.get("has_core_odds") else "—"
+        bm = ", ".join(r.get("bookmakers") or []) or "無"
+        print(
+            f"  [{mark}] id={r['game_id']} {r['match_date']} {r['label']} "
+            f"| 勝分差 {r['margin_count']} | {bm}"
+        )
+
+    loaded = load_games_from_db(
+        db,
+        sport,
+        days_ahead=days,
+        game_ids=game_ids,
+        require_odds=True,
+    )
+    if not loaded:
+        print("\n無具完整核心盤口的賽事可分析。")
+        return
+
+    if game_ids is None and len(loaded) > 1:
+        print(f"\n將分析 {len(loaded)} 場具完整盤口賽事。")
+    games = [x.game_input for x in loaded]
+    _run_analysis(games, total_stake=total_stake, min_ev=min_ev)
+
+    print("\n" + "=" * 60)
+    print("分析完成。")
+    print("=" * 60)
+
+
+def run_cli(
+    *,
+    from_db: bool = False,
+    sport: str = "nba",
+    days: int = 7,
+    game_ids: list[int] | None = None,
+    total_stake: float | None = None,
+    min_ev: float | None = None,
+) -> None:
+    if from_db:
+        run_cli_from_db(
+            sport=sport,
+            days=days,
+            game_ids=game_ids,
+            total_stake=total_stake if total_stake is not None else 100.0,
+            min_ev=min_ev if min_ev is not None else 0.05,
+        )
+        return
+
+    print("=" * 60)
+    print("  台灣運彩 · 全玩法 EV 優化 / 對沖 / 串關系統")
+    print("  UniversalSportOptimizer v1.0")
+    print("=" * 60)
+    print("提示：加 --from-db 可自動讀取 DB 盤口")
+
+    n_raw = input("\n要分析幾場比賽？(1~5) [1]: ").strip() or "1"
+    n_games = max(1, min(5, int(n_raw)))
+    stake = _prompt_float("單場/串關總注碼（元）", total_stake or 100.0)
+    min_ev_raw = input("最低 EV 門檻 (例 0.05 = 5%) [0.05]: ").strip()
+    ev = float(min_ev_raw) if min_ev_raw else (min_ev if min_ev is not None else 0.05)
+
+    games: list[GameInput] = []
+    for i in range(1, n_games + 1):
+        games.append(_input_game(i))
+
+    _run_analysis(games, total_stake=stake, min_ev=ev)
 
     print("\n" + "=" * 60)
     print("分析完成。請依上方劃單指引至台灣運彩投注。")

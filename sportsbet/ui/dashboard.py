@@ -35,6 +35,7 @@ from sportsbet.ui.theme import inject_dashboard_theme, render_masthead  # noqa: 
 from sportsbet.ui.hot_cold_page import page_player_hot_cold  # noqa: E402
 from sportsbet.ui.injury_ticker import render_injury_ticker  # noqa: E402
 from sportsbet.ui.upcoming_page import page_current_future_predictions  # noqa: E402
+from sportsbet.ui.optimizer_page import page_bet_optimizer  # noqa: E402
 from sportsbet.data.team_names import team_bilingual  # noqa: E402
 from sportsbet.ui.odds_display import _fmt_odds  # noqa: E402
 
@@ -828,8 +829,8 @@ def main() -> None:
     render_masthead(sport)
     render_injury_ticker(get_db(), sport)
 
-    tab0, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
-        ["即時賽況", "賽事預測", "歷史覆盤", "球員熱區", "投注訊號", "模型健康", "資金回測"]
+    tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
+        ["即時賽況", "賽事預測", "歷史覆盤", "球員熱區", "投注訊號", "EV 優化", "模型健康", "資金回測"]
     )
     with tab0:
         detail_id = st.session_state.get("game_detail_id")
@@ -850,8 +851,10 @@ def main() -> None:
     with tab4:
         page_daily_picks(sport)
     with tab5:
-        page_model_health(sport)
+        page_bet_optimizer(get_db(), sport, get_prediction_service())
     with tab6:
+        page_model_health(sport)
+    with tab7:
         page_bankroll(sport)
 
 
