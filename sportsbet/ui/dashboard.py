@@ -764,15 +764,15 @@ def main() -> None:
         mark = "✅" if info.get("ok") else "⬜"
         detail = str(info.get("detail") or "")
         st.sidebar.caption(f"{mark} {label} · {detail}")
-    if config.jbot_configured():
-        st.sidebar.success("JBot 盤口已設定（含賽前）")
-    elif config.PLAYSPORT_MONEYLINE_ENABLED:
+    if config.SPORTSLOTTERY_PLAYWRIGHT_ENABLED:
+        st.sidebar.success("台灣運彩官網 SPA 爬蟲已啟用")
+    elif config.PLAYSPORT_ENABLED:
         st.sidebar.warning(
-            "賽前盤口：Register Blob 已下架 · 玩運彩僅補歷史完賽場次。"
-            "請設定 JBOT_TOKEN 或本地 watch 推送 DB。"
+            "賽前盤口：請啟用 SPORTSLOTTERY_PLAYWRIGHT（官網 event 頁）。"
+            "玩運彩僅補官網缺漏之歷史場次。"
         )
     else:
-        st.sidebar.warning("未設定 JBOT_TOKEN · 賽前盤口無法同步")
+        st.sidebar.warning("未啟用官網 / 玩運彩盤口來源")
     if api_key_configured():
         st.sidebar.success("API-Sports 金鑰已設定（作為備援）")
     else:

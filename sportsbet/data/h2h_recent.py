@@ -36,10 +36,17 @@ def get_h2h_recent_for_matchup(
     before_date: str,
     *,
     limit: int | None = None,
+    playoff_only: bool = False,
 ) -> tuple[H2HRecentSide, H2HRecentSide]:
     """對同對手最近 N 場，回傳 (主隊視角, 客隊視角) 勝率。"""
     n_limit = limit or config.BAYES_H2H_RECENT_GAMES
     ph = ",".join("?" for _ in _FINISHED)
+    playoff_filter = ""
+    if playoff_only:
+        playoff_filter = (
+            " AND (season_type LIKE '%季後%' OR competition_note LIKE '%總冠軍%' "
+            "OR competition_note LIKE '%季後%')"
+        )
     with db.connection() as conn:
         rows = conn.execute(
             f"""
@@ -54,6 +61,7 @@ def get_h2h_recent_for_matchup(
                     (home_team = ? AND away_team = ?)
                  OR (home_team = ? AND away_team = ?)
               )
+              {playoff_filter}
             ORDER BY match_date DESC
             LIMIT ?
             """,
@@ -116,7 +124,7 @@ def resolve_matchup_recent_form(
         return home_team_recent, away_team_recent, home_team_recent, away_team_recent, 0
 
     h2h_h, h2h_a = get_h2h_recent_for_matchup(
-        db, sport, home_team, away_team, match_date,
+        db, sport, home_team, away_team, match_date, playoff_only=True,
     )
     if h2h_h.games < config.MC_H2H_PLAYOFF_MIN_GAMES:
         return home_team_recent, away_team_recent, home_team_recent, away_team_recent, 0

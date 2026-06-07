@@ -144,6 +144,10 @@ class DataOrchestrator:
             d = (today + timedelta(days=offset)).isoformat()
             self.provider.fetch_daily_schedule(sport, d)
 
+        from sportsbet.data.playoff_repair import repair_playoff_season_types
+
+        out["playoff_meta_repaired"] = repair_playoff_season_types(self.db, sport)
+
         out["ledger_pre"] = capture_ledger_pre(self.db, sport)
 
         for offset in range(days + 1):

@@ -201,10 +201,27 @@ GITHUB_REPO_REMOTE = os.getenv("GITHUB_REPO_REMOTE", "https://github.com/show062
 WANDA_BASE_URL = os.getenv("WANDA_BASE_URL", "https://www.twsport.com.tw")
 WANDA_REQUEST_DELAY_SEC = float(os.getenv("WANDA_REQUEST_DELAY_SEC", "1.5"))
 
-# --- 台灣運彩 Blob API（公開 JSON）---
+# --- 台灣運彩 Blob API（公開 JSON；Live 場中有效，Register 已下架）---
 SPORTSLOTTERY_BLOB_BASE = os.getenv(
     "SPORTSLOTTERY_BLOB_BASE",
     "https://blob.sportslottery.com.tw/apidata",
+)
+SPORTSLOTTERY_WWW_BASE = os.getenv(
+    "SPORTSLOTTERY_WWW_BASE",
+    "https://www.sportslottery.com.tw",
+)
+# 官網 SPA 賽前盤口（Playwright；Streamlit Cloud 需本地 watch 推送 DB）
+SPORTSLOTTERY_PLAYWRIGHT_ENABLED = os.getenv(
+    "SPORTSLOTTERY_PLAYWRIGHT_ENABLED", "true",
+).lower() == "true"
+SPORTSLOTTERY_PLAYWRIGHT_HEADLESS = os.getenv(
+    "SPORTSLOTTERY_PLAYWRIGHT_HEADLESS", "false",
+).lower() == "true"
+SPORTSLOTTERY_PLAYWRIGHT_WAIT_MS = int(os.getenv("SPORTSLOTTERY_PLAYWRIGHT_WAIT_MS", "35000"))
+SPORTSLOTTERY_MAX_EVENTS_PER_SYNC = int(os.getenv("SPORTSLOTTERY_MAX_EVENTS_PER_SYNC", "12"))
+SPORTSLOTTERY_PLAYWRIGHT_STATE_PATH = os.getenv(
+    "SPORTSLOTTERY_PLAYWRIGHT_STATE_PATH",
+    str(Path(__file__).resolve().parents[1] / "data" / ".sportslottery_state.json"),
 )
 
 # --- Sportradar StatsHub（台灣運彩官方數據頁）---

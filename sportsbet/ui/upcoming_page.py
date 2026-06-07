@@ -321,7 +321,7 @@ def page_current_future_predictions(sport: str, svc: PredictionService) -> None:
         with st.spinner("偵測到缺漏盤口，正在同步台灣運彩 / JBot…"):
             stats = svc.sync_upcoming_odds(sport, days_ahead=days_ahead)
         st.session_state[sync_key] = True
-        if stats.get("sportslottery_rows") or stats.get("jbot_upcoming"):
+        if stats.get("sportslottery_rows") or stats.get("playsport_fallback"):
             st.rerun()
 
     if forecasts and _forecasts_missing_odds(svc, forecasts):
@@ -332,11 +332,11 @@ def page_current_future_predictions(sport: str, svc: PredictionService) -> None:
             "模型勝率與預估比分仍正常顯示。"
         )
         st.caption(prematch_odds_source_hint())
-        if not config.jbot_configured():
+        if not config.SPORTSLOTTERY_PLAYWRIGHT_ENABLED:
             st.code(
-                "# Streamlit Cloud → Settings → Secrets\n"
-                'JBOT_TOKEN = "你的 JBot 密鑰"\n'
-                "# 申請：https://sportsbot.tech/api/",
+                "# .env 或 Streamlit Secrets\n"
+                "SPORTSLOTTERY_PLAYWRIGHT_ENABLED = true\n"
+                "SPORTSLOTTERY_PLAYWRIGHT_HEADLESS = false  # 本機首次建議 false 通過 CF",
                 language="toml",
             )
 

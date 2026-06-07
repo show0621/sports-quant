@@ -9,3 +9,4 @@ streamlit>=1.33.0
 plotly>=5.18.0
 pyarrow>=14.0.0
 nba_api>=1.4.1
+playwright>=1.40.0

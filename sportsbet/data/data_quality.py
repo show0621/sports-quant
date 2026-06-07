@@ -4,6 +4,8 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Literal
 
+import pandas as pd
+
 from sportsbet.data.database import SportsDatabase
 
 Sport = Literal["nba", "mlb"]
@@ -47,6 +49,88 @@ def team_has_player_metrics(db: SportsDatabase, sport: Sport, team: str) -> bool
     return int(players[col].notna().sum()) >= 3
 
 
+def _matchup_has_material_injuries(
+    db: SportsDatabase,
+    sport: Sport,
+    home_team: str,
+    away_team: str,
+    match_date: str,
+) -> bool:
+    """主客至少一人 Out/Doubtful/Questionable（排除僅邊緣球員 Out）。"""
+    from sportsbet import config
+
+    inj = db.get_injuries(sport, match_date)
+    if inj.empty:
+        return False
+    material = {"Out", "Doubtful", "Questionable"}
+    for team in (home_team, away_team):
+        team_inj = inj[inj["team"] == team]
+        if team_inj.empty:
+            continue
+        for _, row in team_inj.iterrows():
+            status = str(row.get("status", ""))
+            if status not in material:
+                continue
+            name = str(row.get("player_name") or row.get("name") or "")
+            players = db.get_players_by_team(sport, team)
+            if players.empty:
+                return True
+            hit = players[players["name"].astype(str).str.contains(name[:8], na=False)]
+            if hit.empty:
+                return True
+            col = "vorp" if sport == "nba" else "war"
+            if col in hit.columns and hit[col].notna().any():
+                top = players[col].dropna().sort_values(ascending=False).head(8)
+                if not top.empty and float(hit[col].fillna(0).max()) >= float(top.min()) * 0.5:
+                    return True
+    return False
+
+
+def projected_lineup_sane(
+    db: SportsDatabase,
+    sport: Sport,
+    team: str,
+    match_date: str,
+) -> bool:
+    """拒絕 StatsHub 等錯誤先發（例如 Brunson 被排成替補、McBride 38 分鐘）。"""
+    if sport != "nba":
+        return True
+    lineup = db.get_projected_lineup(sport, team, match_date)
+    players = db.get_players_by_team(sport, team)
+    if lineup.empty or players.empty or "vorp" not in players.columns:
+        return True
+    merged = lineup.merge(players[["player_id", "name", "vorp"]], on="player_id", how="left")
+    vorp = players["vorp"].dropna()
+    if vorp.empty:
+        return True
+    star = players.loc[vorp.idxmax()]
+    star_id = star.get("player_id")
+    star_row = merged[merged["player_id"] == star_id]
+    if star_row.empty:
+        return True
+    try:
+        star_min = float(star_row.iloc[0].get("expected_minutes") or 0)
+        is_starter = bool(star_row.iloc[0].get("is_starter"))
+    except (TypeError, ValueError):
+        return True
+    if not is_starter and star_min < 30:
+        return False
+    if star_min > 0 and star_min < 24 and not is_starter:
+        return False
+    top8 = players.nlargest(8, "vorp", keep="first")
+    for _, row in merged.iterrows():
+        try:
+            mins = float(row.get("expected_minutes") or 0)
+        except (TypeError, ValueError):
+            continue
+        v = row.get("vorp")
+        if pd.notna(v) and float(v) > 2.5 and mins > 42:
+            return False
+    if star_id in set(top8["player_id"]) and star_min < 26:
+        return False
+    return True
+
+
 def matchup_injury_adjustment_ready(
     db: SportsDatabase,
     sport: Sport,
@@ -56,16 +140,22 @@ def matchup_injury_adjustment_ready(
 ) -> bool:
     """
     是否允許套用傷兵/陣容勝率修正：
-    需近期傷兵已同步，且主客隊皆有真實球員 VORP/WAR。
+    需近期傷兵已同步、主客有 VORP/WAR、先發合理，且存在實質傷兵。
     """
     if not roster_rating_enabled(db, sport):
         return False
     if not _injuries_synced_recently(db, sport):
         return False
-    return (
+    if not (
         team_has_player_metrics(db, sport, home_team)
         and team_has_player_metrics(db, sport, away_team)
-    )
+    ):
+        return False
+    if not projected_lineup_sane(db, sport, home_team, match_date):
+        return False
+    if not projected_lineup_sane(db, sport, away_team, match_date):
+        return False
+    return _matchup_has_material_injuries(db, sport, home_team, away_team, match_date)
 
 
 def _injuries_synced_recently(db: SportsDatabase, sport: Sport) -> bool:
@@ -84,6 +174,8 @@ def data_quality_summary(db: SportsDatabase, sport: Sport) -> dict[str, bool]:
 
 def data_quality_detail(db: SportsDatabase, sport: Sport) -> dict[str, dict[str, object]]:
     """各資料源是否就緒 + 除錯用說明。"""
+    from sportsbet import config
+
     stats = db.get_team_stats(sport)
     bm_placeholders = ",".join("?" for _ in TW_ODDS_BOOKMAKERS)
     with db.connection() as conn:
@@ -155,11 +247,9 @@ def data_quality_detail(db: SportsDatabase, sport: Sport) -> dict[str, dict[str,
         if blob_n == 0 and "playsport" in tw_sources:
             tw_note += "（玩運彩歷史；即時 Blob 尚無）"
     else:
-        tw_note = "無盤口 · 賽前需 JBOT_TOKEN 或 watch 同步"
-        from sportsbet import config
-
-        if not config.jbot_configured():
-            tw_note += "（Register Blob 已下架）"
+        tw_note = "無盤口 · 請啟用官網 Playwright 或本地 watch 同步"
+        if not config.SPORTSLOTTERY_PLAYWRIGHT_ENABLED:
+            tw_note += "（SPORTSLOTTERY_PLAYWRIGHT_ENABLED=false）"
 
     return {
         "team_stats": {

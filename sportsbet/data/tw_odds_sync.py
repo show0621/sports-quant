@@ -1,8 +1,8 @@
 """
-台灣運彩賠率同步：官方 Blob（sportslottery.com.tw 後端）→ 玩運彩補缺。
+台灣運彩賠率同步：① 官網 SPA（Playwright）② Blob 場中 ③ 玩運彩補缺。
 
-官網 event 頁（如 /sportsbook/.../event/3472877.1）資料來自同一套 Blob JSON；
-Cloudflare 擋 HTML API，故以 blob.sportslottery.com.tw/apidata 為主來源。
+官網 event 例：
+/sportsbook/sport/籃球/美國/美國職籃/34801.1/event/3472877.1
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 Sport = str
 TW_BOOKMAKER = "sportslottery"
 CORE_MARKETS = ("moneyline", "spread", "total")
-TW_ODDS_BOOKMAKERS = ("sportslottery", "jbot", "playsport", "tw_standard")
+TW_ODDS_BOOKMAKERS = ("sportslottery", "playsport", "tw_standard")
 
 
 def _resolve_playsport_team_id(
@@ -79,15 +79,16 @@ def _game_has_tw_core_markets(db: SportsDatabase, game_id: int) -> bool:
 
 
 def prematch_odds_source_hint() -> str:
-    """Streamlit / 日誌用：說明賽前盤口來源限制。"""
-    from sportsbet import config
-
-    if config.jbot_configured():
-        return "賽前盤口：JBot API（已設定 JBOT_TOKEN）"
+    """Streamlit / 日誌用：說明賽前盤口來源。"""
+    if config.SPORTSLOTTERY_PLAYWRIGHT_ENABLED:
+        return (
+            "賽前盤口：台灣運彩官網 SPA（Playwright）。"
+            "若 Cloud 仍空白，請在本機執行 "
+            "`python main.py sync --mode daily --sport nba` 或 watch 後推送 DB。"
+        )
     return (
-        "台灣運彩 Register Blob 已下架，賽前盤口無法從官方 Blob 取得。"
-        "請在 Streamlit Secrets 或 .env 設定 JBOT_TOKEN，"
-        "或在本地執行 `python main.py watch --sport nba` 同步後推送 DB。"
+        "請啟用 SPORTSLOTTERY_PLAYWRIGHT_ENABLED=true，"
+        "由官網 event 頁抓取賽前盤口；玩運彩僅補官網缺漏之歷史場次。"
     )
 
 
@@ -174,13 +175,30 @@ def _write_sportslottery_rows(
 
 
 def fetch_sportslottery_odds_df(sport: Sport) -> pd.DataFrame:
+    """Blob 場中 + 官網 Playwright 賽前。"""
     from sportsbet.data.sportslottery import SportLotteryClient
     from sportsbet.data.team_logos import resolve_team_in_database
 
+    frames: list[pd.DataFrame] = []
     client = SportLotteryClient()
-    df = client.fetch_all(sports={sport})
-    if df.empty:
-        return df
+    blob_df = client.fetch_all(sports={sport})
+    if not blob_df.empty:
+        frames.append(blob_df)
+
+    if config.SPORTSLOTTERY_PLAYWRIGHT_ENABLED:
+        from sportsbet.data.sportslottery_web import fetch_web_odds_df
+
+        web_df = fetch_web_odds_df(sport)
+        if not web_df.empty:
+            frames.append(web_df)
+
+    if not frames:
+        return pd.DataFrame()
+
+    df = pd.concat(frames, ignore_index=True).drop_duplicates(
+        subset=["event_id", "market", "selection", "handicap", "odds", "odds_phase"],
+        keep="last",
+    )
     db = SportsDatabase()
     out = df.copy()
     out["home_team"] = out["home_team"].map(
@@ -199,7 +217,7 @@ def fill_playsport_gaps_for_date(
     *,
     max_teams: int | None = None,
 ) -> int:
-    """玩運彩補缺：僅對尚無 sportslottery 完整盤口的場次/球隊抓取。"""
+    """玩運彩補缺：僅當官網（sportslottery）尚無完整盤口時才抓。"""
     if not config.PLAYSPORT_ENABLED:
         return 0
 
@@ -210,7 +228,7 @@ def fill_playsport_gaps_for_date(
     need_gids = [
         int(r["id"])
         for _, r in games.iterrows()
-        if not _game_has_tw_core_markets(db, int(r["id"]))
+        if not _game_has_market_from_bookmaker(db, int(r["id"]), TW_BOOKMAKER)
     ]
     if not need_gids:
         return 0
@@ -264,10 +282,9 @@ def sync_tw_odds_for_date(
     playsport_fallback: bool | None = None,
 ) -> dict[str, int]:
     """
-    單日台灣盤口：① 台灣運彩 Blob ② 缺漏時玩運彩。
-    含不讓分 / 讓分 / 大小分 / 勝分差（margin）。
+    單日台灣盤口：① 官網/Blob ② 缺漏時玩運彩（官網有則不抓玩運彩）。
     """
-    out = {"sportslottery_rows": 0, "playsport_fallback": 0}
+    out = {"sportslottery_rows": 0, "playsport_fallback": 0, "sportslottery_web": 0}
     try:
         odds_df = fetch_sportslottery_odds_df(sport)
         if not odds_df.empty and "match_date" in odds_df.columns:
@@ -281,10 +298,13 @@ def sync_tw_odds_for_date(
     use_ps = playsport_fallback if playsport_fallback is not None else config.PLAYSPORT_ENABLED
     if use_ps:
         games = db.get_games(sport, match_date)
-        incomplete = any(
-            not _game_has_tw_core_markets(db, int(r["id"])) for _, r in games.iterrows()
-        ) if not games.empty else out["sportslottery_rows"] == 0
-        if incomplete or out["sportslottery_rows"] == 0:
+        need_ps = [
+            int(r["id"])
+            for _, r in games.iterrows()
+            if not _game_has_market_from_bookmaker(db, int(r["id"]), TW_BOOKMAKER)
+            and not _game_has_tw_core_markets(db, int(r["id"]))
+        ] if not games.empty else []
+        if need_ps:
             out["playsport_fallback"] = fill_playsport_gaps_for_date(
                 db,
                 sport,
@@ -293,6 +313,15 @@ def sync_tw_odds_for_date(
             )
 
     return out
+
+
+def _game_has_market_from_bookmaker(db: SportsDatabase, game_id: int, bookmaker: str) -> bool:
+    with db.connection() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM odds WHERE game_id = ? AND bookmaker = ? LIMIT 1",
+            (game_id, bookmaker),
+        ).fetchone()
+    return row is not None
 
 
 def sync_tw_odds_recent(
@@ -314,9 +343,5 @@ def sync_tw_odds_recent(
         totals["sportslottery_rows"] += part["sportslottery_rows"]
         totals["playsport_fallback"] += part["playsport_fallback"]
         totals["days"] += 1
-    if config.jbot_configured():
-        from sportsbet.data.jbot_odds_sync import sync_jbot_upcoming_odds
-
-        totals["jbot_upcoming"] = sync_jbot_upcoming_odds(db, sport, days_ahead=span)
     db.set_backtest_sync_meta(sport, "tw_odds_synced_at", date.today().isoformat())
     return totals

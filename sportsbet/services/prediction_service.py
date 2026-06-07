@@ -216,13 +216,12 @@ class PredictionService:
         return synced
 
     def sync_upcoming_odds(self, sport: Sport, *, days_ahead: int) -> dict[str, int]:
-        """同步今日起 N 天台灣盤口（運彩 Blob → JBot → 玩運彩補缺）。"""
+        """同步今日起 N 天台灣盤口（官網 SPA / Blob → 玩運彩補缺）。"""
         from sportsbet.data.tw_odds_sync import sync_tw_odds_for_date
 
         totals: dict[str, int] = {
             "sportslottery_rows": 0,
             "playsport_fallback": 0,
-            "jbot_upcoming": 0,
             "days": 0,
         }
         today = date.today()
@@ -232,21 +231,6 @@ class PredictionService:
             totals["sportslottery_rows"] += int(part.get("sportslottery_rows", 0))
             totals["playsport_fallback"] += int(part.get("playsport_fallback", 0))
             totals["days"] += 1
-
-        from sportsbet import config
-
-        if config.jbot_configured():
-            from sportsbet.data.jbot_odds_sync import sync_jbot_upcoming_odds
-
-            for mode in ("close", "open", "both"):
-                n = sync_jbot_upcoming_odds(
-                    self.db, sport, days_ahead=days_ahead, mode=mode,
-                )
-                totals["jbot_upcoming"] += int(n)
-                if n > 0:
-                    break
-        else:
-            totals["jbot_skipped"] = 1  # type: ignore[assignment]
 
         self.db.set_backtest_sync_meta(sport, "tw_odds_synced_at", today.isoformat())
         return totals

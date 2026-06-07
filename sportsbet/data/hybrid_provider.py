@@ -175,7 +175,7 @@ def data_source_description(sport: SportLit) -> str:
         parts.append("NBA=nba_api+ESPN")
     else:
         parts.append("MLB=ESPN")
-    parts.append("賠率=台灣運彩Blob→玩運彩補缺")
+    parts.append("賠率=台灣運彩官網→Blob→玩運彩補缺")
     parts.append("傷兵=ESPN")
     if config.API_SPORTS_USE_FOR_SCHEDULE and config.resolve_api_sports_key():
         parts.append("API-Sports=賽程")
